@@ -62,3 +62,6 @@ tensorboard/
 
 # Claude Code (local only)
 .claude/
+
+# Archive (local reference only)
+archive/
