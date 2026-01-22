@@ -1,0 +1,45 @@
+# 4D Gaussian Splatting (4DGS) Configuration
+# Based on: https://github.com/hustvl/4DGaussians
+
+name: "4dgs"
+pretty_name: "4DGS"
+description: "Dynamic 4D Gaussian Splatting for reconstructing moving scenes"
+vram_usage: "24GB+"
+implementation: "hustvl/4DGaussians"
+install_dir: "external/4dgs"
+
+setup:
+  - cmd: "git clone --recursive https://github.com/hustvl/4DGaussians {install_dir}"
+    check_exists: "{install_dir}"
+  # Ensure submodules are initialized if the repo was cloned without --recursive
+  - cmd: "git submodule update --init --recursive"
+    cwd: "{install_dir}"
+  # [HYPER-SAFE SETUP] Avoiding automatic dependency resolution to protect the server environment.
+  # Submodule compilation requires CUDA_HOME (Explicitly exported below)
+  - cmd: "export CUDA_HOME={cuda_home} && {python} -m pip install submodules/depth-diff-gaussian-rasterization --no-deps"
+    cwd: "{install_dir}"
+  - cmd: "export CUDA_HOME={cuda_home} && {python} -m pip install submodules/simple-knn --no-deps"
+    cwd: "{install_dir}"
+  # Installing essential libraries individually to avoid heavy dependency resolution
+  - cmd: "{python} -m pip install lpips tqdm plyfile opencv-python-headless scipy tensorboard open3d plotly dash flask narwhals importlib-metadata joblib python-dateutil pytz pyparsing cycler kiwisolver fonttools scikit-learn addict configargparse pandas matplotlib rerun-sdk \"numpy<2.0\" --no-deps"
+  # Patch dataset_readers.py to support CAMERA_ANGLE_OFFSET environment variable for custom camera rendering
+  - cmd: "{python} src/patch_4dgs_camera_offset.py {install_dir}/scene/dataset_readers.py"
+
+train:
+  command: "{python} {install_dir}/train.py -s {scene_path} -m {output_path} --eval {extra_args}"
+  iterations: 30000
+  position_lr_init: 0.00016
+  position_lr_final: 0.0000016
+  feature_lr: 0.0025
+  opacity_lr: 0.05
+  scaling_lr: 0.005
+  rotation_lr: 0.001
+  deformation_lr: 0.00016 # Specific to 4DGS
+
+temporal:
+  fps: 24
+  timestamp_mode: "normalized" # [0, 1] across the sequence
+
+data:
+  format: "sequence"
+  timestamp_file: "timestamps.json"

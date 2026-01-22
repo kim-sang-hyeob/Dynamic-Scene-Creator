@@ -1,0 +1,22 @@
+name: "fastgs"
+pretty_name: "FastGS"
+description: "Extremely fast training (2-7x speedup)."
+repo_url: "https://github.com/fastgs/FastGS"
+vram_usage: "Moderate"
+install_dir: "external/fastgs"
+
+setup:
+  - cmd: "git clone --recursive {repo_url} {install_dir}"
+    check_exists: "{install_dir}"
+  - cmd: "git submodule update --init --recursive"
+    cwd: "{install_dir}"
+  - cmd: "{python} -m pip install ./submodules/diff-gaussian-rasterization_fastgs"
+    cwd: "{install_dir}"
+  - cmd: "{python} -m pip install ./submodules/simple-knn"
+    cwd: "{install_dir}"
+  - cmd: "{python} -m pip install ./submodules/fused-ssim"
+    cwd: "{install_dir}"
+
+train:
+  command: "{python} train.py -s {scene_path} -m {output_path} {extra_args}"
+  cwd: "{install_dir}"

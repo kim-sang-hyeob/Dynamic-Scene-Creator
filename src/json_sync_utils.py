@@ -1,0 +1,458 @@
+import os
+import json
+import cv2
+import numpy as np
+import math
+
+# Default map transform (can be overridden via map_transform.json in project directory)
+DEFAULT_MAP_TRANSFORM = {
+    'position': [-150.85, -30.0, 3.66],
+    'rotation': [0, 0, 0],
+    'scale': [3, 3, 3]
+}
+
+def load_map_transform(project_dir):
+    """Load map transform from file if exists, otherwise return None."""
+    map_transform_path = os.path.join(project_dir, "map_transform.json")
+    if os.path.exists(map_transform_path):
+        with open(map_transform_path, 'r') as f:
+            data = json.load(f)
+            print(f"[JSON-Sync] Loaded map_transform from {map_transform_path}")
+            return {
+                'position': np.array(data['position']),
+                'rotation': np.array(data['rotation']),
+                'scale': np.array(data['scale'])
+            }
+    return None
+
+def save_map_transform(project_dir, map_transform):
+    """Save map transform to file for reproducibility and camera rotation patch."""
+    map_transform_path = os.path.join(project_dir, "map_transform.json")
+    data = {
+        'position': map_transform['position'].tolist() if isinstance(map_transform['position'], np.ndarray) else list(map_transform['position']),
+        'rotation': map_transform['rotation'].tolist() if isinstance(map_transform['rotation'], np.ndarray) else list(map_transform['rotation']),
+        'scale': map_transform['scale'].tolist() if isinstance(map_transform['scale'], np.ndarray) else list(map_transform['scale']),
+        '_description': 'Unity map transform for coordinate conversion. Used by camera rotation patch.'
+    }
+    with open(map_transform_path, 'w') as f:
+        json.dump(data, f, indent=4)
+    print(f"[JSON-Sync] Saved map_transform to {map_transform_path}")
+
+def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None):
+    """
+    Synchronizes the JSON tracking data (from original video) with the Diffusion-generated video.
+    Diffusion video is often faster (sped up) than the original tracking sequence.
+    """
+    # Ensure absolute paths for safety on server
+    output_dir = os.path.abspath(output_dir)
+    video_path = os.path.abspath(video_path)
+    json_path = os.path.abspath(json_path)
+    original_video_path = os.path.abspath(original_video_path)
+
+    print(f"[JSON-Sync] Base output directory: {output_dir}")
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    img_dir = os.path.join(output_dir, "images")
+    os.makedirs(img_dir, exist_ok=True)
+    
+    # 1. Load JSON data
+    if not os.path.exists(json_path):
+        print(f"[Error] JSON file not found: {json_path}")
+        return False
+    with open(json_path, 'r') as f:
+        json_data = json.load(f)
+    json_frames = json_data['frames']
+    
+    # 2. Get Video Info
+    cap_out = cv2.VideoCapture(video_path)
+    if not cap_out.isOpened():
+        print(f"[Error] Could not open output video: {video_path}")
+        return False
+        
+    fps_out = cap_out.get(cv2.CAP_PROP_FPS)
+    total_frames_out = int(cap_out.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration_out = total_frames_out / fps_out
+    
+    cap_orig = cv2.VideoCapture(original_video_path)
+    if not cap_orig.isOpened():
+        print(f"[Error] Could not open original video: {original_video_path}")
+        cap_out.release()
+        return False
+        
+    fps_orig = cap_orig.get(cv2.CAP_PROP_FPS)
+    total_frames_orig = int(cap_orig.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration_orig = total_frames_orig / fps_orig
+    
+    print(f"[JSON-Sync] Original: {duration_orig:.2f}s ({total_frames_orig} frames)")
+    print(f"[JSON-Sync] Output: {duration_out:.2f}s ({total_frames_out} frames)")
+
+    # Time mapping: Video diffusion compresses entire original into shorter output
+    time_scale = duration_orig / duration_out
+    print(f"[JSON-Sync] Time scale: {time_scale:.3f}x (diffusion sped up the video)")
+    
+    # 3. Process Frames
+    extracted_frames = []
+    print(f"[JSON-Sync] Extracting {total_frames_out} frames to {img_dir}...")
+    
+    for i in range(total_frames_out):
+        ret, frame = cap_out.read()
+        if not ret:
+            print(f"[Warning] Failed to read frame {i} from video.")
+            break
+            
+        # Current time in output video
+        t_out = i / fps_out
+        # Corresponding time in the JSON/Original scale
+        t_orig = t_out * time_scale
+        
+        # Find closest frame in JSON (Binary search or simple look-up)
+        # Assuming JSON is ordered by time
+        closest_idx = 0
+        min_diff = float('inf')
+        for j, (f_data) in enumerate(json_frames):
+            diff = abs(f_data['time'] - t_orig)
+            if diff < min_diff:
+                min_diff = diff
+                closest_idx = j
+            elif diff > min_diff: # Optimization: already passed the closest point
+                break
+        
+        target_json = json_frames[closest_idx]
+        
+        # Save Frame
+        frame_name = f"{i:04d}.png"
+        save_path = os.path.join(img_dir, frame_name)
+        success = cv2.imwrite(save_path, frame)
+        if not success:
+            print(f"[Error] Failed to write frame to {save_path}")
+        elif i == 0:
+            print(f"[JSON-Sync] First frame saved successfully: {save_path}")
+        
+        # Convert Camera Pose to COLMAP/3DGS format if needed
+        # (This is a simplified version, real 3DGS needs COLMAP sparse folder or transforms.json)
+        extracted_frames.append({
+            "file_path": frame_name,
+            "time": t_out / duration_out, # Normalized [0,1] for 4DGS
+            "original_time": t_orig,
+            "camPos": target_json['camPos'],
+            "camRot": target_json['camRot'],
+            "objPos": target_json.get('objPos', {'x':0, 'y':0, 'z':0})
+        })
+        
+    cap_out.release()
+    cap_orig.release()
+    
+    # Save the synchronized metadata for 4DGS
+    sync_meta = os.path.join(output_dir, "sync_metadata.json")
+    with open(sync_meta, "w") as f:
+        json.dump(extracted_frames, f, indent=4)
+        
+    # Generate 4DGS timestamps.json
+    timestamps = [{"file_path": f["file_path"], "timestamp": f["time"], "frame_idx": i} 
+                  for i, f in enumerate(extracted_frames)]
+    with open(os.path.join(output_dir, "timestamps.json"), "w") as f:
+        json.dump(timestamps, f, indent=4)
+        
+    # 4. Determine map transform (load from file, use provided, or default)
+    if map_transform is None:
+        map_transform = get_map_transform(output_dir)
+
+    # Save map_transform.json for reproducibility and camera rotation patch
+    save_map_transform(output_dir, map_transform)
+
+    # 5. Generate COLMAP sparse/0 (SfM) files to bypass VGGT
+    sparse_dir = os.path.join(output_dir, "sparse", "0")
+    os.makedirs(sparse_dir, exist_ok=True)
+
+    write_colmap_text(extracted_frames, sparse_dir, img_dir, map_transform)
+
+    # 6. Generate transforms_train.json for 4DGS (D-NeRF format)
+    write_transforms_json(extracted_frames, output_dir, map_transform)
+
+    print(f"[JSON-Sync] Successfully synced {len(extracted_frames)} frames.")
+    print(f"[JSON-Sync] Generated SfM (COLMAP) files in {sparse_dir}. You can skip SfM!")
+    print(f"[JSON-Sync] Generated transforms_train.json for 4DGS.")
+    return sync_meta
+
+def get_map_transform(project_dir=None):
+    """Returns the Unity map transform for normalization.
+
+    If project_dir is provided, tries to load from map_transform.json first.
+    Otherwise returns the default transform.
+
+    CRITICAL: The position must center on the OBJECT, not the camera!
+    D-NeRF/4DGS expects the object at the origin with cameras orbiting around it.
+    """
+    # Try to load from file first
+    if project_dir:
+        loaded = load_map_transform(project_dir)
+        if loaded:
+            return loaded
+
+    # Return default
+    return {
+        'position': np.array(DEFAULT_MAP_TRANSFORM['position']),
+        'rotation': np.array(DEFAULT_MAP_TRANSFORM['rotation']),
+        'scale': np.array(DEFAULT_MAP_TRANSFORM['scale'])
+    }
+
+def normalize_position(pos, map_transform=None):
+    """Normalize a Unity world position to local coordinates."""
+    if map_transform is None:
+        map_transform = get_map_transform()
+
+    map_pos = np.array(map_transform['position'])
+    map_rot = np.array(map_transform['rotation'])
+    map_scale = np.array(map_transform['scale'])
+
+    # Create rotation matrix from Euler angles
+    rx, ry, rz = np.radians(map_rot)
+    Rx = np.array([[1, 0, 0], [0, np.cos(rx), -np.sin(rx)], [0, np.sin(rx), np.cos(rx)]])
+    Ry = np.array([[np.cos(ry), 0, np.sin(ry)], [0, 1, 0], [-np.sin(ry), 0, np.cos(ry)]])
+    Rz = np.array([[np.cos(rz), -np.sin(rz), 0], [np.sin(rz), np.cos(rz), 0], [0, 0, 1]])
+    R_map = Rz @ Ry @ Rx
+    R_map_inv = R_map.T
+
+    # Undo map transform
+    C_local = pos - map_pos
+    C_local = R_map_inv @ C_local
+    C_local = C_local / map_scale
+
+    return C_local
+
+def write_colmap_text(frames, output_dir, img_dir=None, map_transform=None):
+    """
+    Writes cameras.txt, images.txt, and points3D.txt in COLMAP format.
+    Includes proper Unity (LHS) to COLMAP (RHS) conversion with map transform normalization.
+    """
+    if map_transform is None:
+        map_transform = get_map_transform()
+
+    # 1. cameras.txt - Get actual image dimensions
+    width, height = 1280, 720  # Default fallback
+    if img_dir is None:
+        img_dir = os.path.join(os.path.dirname(output_dir), "images")
+
+    # Try to read first image to get actual dimensions
+    if os.path.exists(img_dir):
+        for fname in sorted(os.listdir(img_dir)):
+            if fname.lower().endswith(('.png', '.jpg', '.jpeg')):
+                img_path = os.path.join(img_dir, fname)
+                img = cv2.imread(img_path)
+                if img is not None:
+                    height, width = img.shape[:2]
+                    print(f"[COLMAP] Using actual image dimensions: {width}x{height}")
+                    break
+
+    # Unity default vertical FOV is 60 degrees
+    # focal = height / (2 * tan(vfov/2))
+    unity_vfov = math.radians(60)
+    focal = height / (2 * math.tan(unity_vfov / 2))
+    with open(os.path.join(output_dir, "cameras.txt"), "w") as f:
+        f.write("# Camera list with one line of data per camera:\n")
+        f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
+        f.write(f"1 PINHOLE {width} {height} {focal} {focal} {width/2} {height/2}\n")
+
+    # Build map rotation matrix for camera rotation normalization
+    map_rot = np.array(map_transform['rotation'])
+    rx, ry, rz = np.radians(map_rot)
+    Rx = np.array([[1, 0, 0], [0, np.cos(rx), -np.sin(rx)], [0, np.sin(rx), np.cos(rx)]])
+    Ry = np.array([[np.cos(ry), 0, np.sin(ry)], [0, 1, 0], [-np.sin(ry), 0, np.cos(ry)]])
+    Rz = np.array([[np.cos(rz), -np.sin(rz), 0], [np.sin(rz), np.cos(rz), 0], [0, 0, 1]])
+    R_map = Rz @ Ry @ Rx
+    R_map_inv = R_map.T
+
+    # 2. images.txt
+    with open(os.path.join(output_dir, "images.txt"), "w") as f:
+        f.write("# Image list with two lines of data per image:\n")
+        for i, frame in enumerate(frames):
+            p = frame['camPos']
+            q = frame['camRot']
+
+            # --- Coordinate Conversion with Normalization ---
+            # 1. Convert Unity Quaternion to Rotation Matrix (LHS)
+            qx, qy, qz, qw = q['x'], q['y'], q['z'], q['w']
+            R_unity = quat_to_mat(qx, qy, qz, qw)
+            C_unity = np.array([p['x'], p['y'], p['z']])
+
+            # 2. Normalize position (undo map transform)
+            C_local = normalize_position(C_unity, map_transform)
+
+            # 3. Normalize rotation (undo map rotation)
+            R_local = R_map_inv @ R_unity
+
+            # 4. Convert LHS to RHS (COLMAP: Y-down)
+            S = np.diag([1, -1, 1])
+            R_rhs = S @ R_local @ S
+            C_rhs = S @ C_local
+
+            # 5. Convert Camera-to-World to World-to-Camera
+            R_w2c = R_rhs.T
+            t_w2c = -R_w2c @ C_rhs
+
+            # 6. Convert Matrix back to Quaternion for COLMAP images.txt
+            qw_c, qx_c, qy_c, qz_c = mat_to_quat(R_w2c)
+
+            # Line 1: IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME
+            f.write(f"{i+1} {qw_c} {qx_c} {qy_c} {qz_c} {t_w2c[0]} {t_w2c[1]} {t_w2c[2]} 1 {frame['file_path']}\n\n")
+
+    # 3. points3D.txt (Normalized point cloud seeding)
+    with open(os.path.join(output_dir, "points3D.txt"), "w") as f:
+        f.write("# 3D point list with one line of data per point:\n")
+        pt_idx = 1
+        for frame in frames:
+            obj_pos = frame.get('objPos', {'x':0, 'y':0, 'z':0})
+            obj_unity = np.array([obj_pos['x'], obj_pos['y'], obj_pos['z']])
+
+            # Normalize object position (same as camera)
+            obj_local = normalize_position(obj_unity, map_transform)
+
+            # Apply same flip as transforms_json (Z flip for NeRF convention)
+            ox, oy, oz = obj_local[0], obj_local[1], -obj_local[2]
+
+            # Sample a few points around the object to give 4DGS a dense start
+            for dx in [-0.1, 0, 0.1]:
+                for dy in [-0.1, 0, 0.1]:
+                    for dz in [-0.1, 0, 0.1]:
+                        f.write(f"{pt_idx} {ox+dx} {oy+dy} {oz+dz} 128 128 128 0\n")
+                        pt_idx += 1
+
+def write_transforms_json(frames, output_dir, map_transform=None):
+    """
+    Writes transforms_train.json, transforms_test.json, transforms_val.json
+    in D-NeRF/Blender format for 4DGS compatibility.
+
+    Args:
+        frames: List of frame data with camPos, camRot, time
+        output_dir: Output directory
+        map_transform: Optional dict with Unity map transform to undo
+    """
+    # Camera intrinsics - get actual dimensions from images
+    width, height = 1280, 720  # Default fallback
+    img_dir = os.path.join(output_dir, "images")
+
+    if os.path.exists(img_dir):
+        for fname in sorted(os.listdir(img_dir)):
+            if fname.lower().endswith(('.png', '.jpg', '.jpeg')):
+                img_path = os.path.join(img_dir, fname)
+                img = cv2.imread(img_path)
+                if img is not None:
+                    height, width = img.shape[:2]
+                    break
+
+    # Unity default vertical FOV is 60 degrees
+    # Convert to focal length: focal = height / (2 * tan(vfov/2))
+    unity_vfov_deg = 60
+    unity_vfov = math.radians(unity_vfov_deg)
+    focal = height / (2 * math.tan(unity_vfov / 2))
+    camera_angle_x = 2 * math.atan(width / (2 * focal))
+
+    # Use shared map transform
+    if map_transform is None:
+        map_transform = get_map_transform()
+
+    # Build inverse map transform to normalize camera positions
+    map_rot = np.array(map_transform['rotation'])
+
+    # Create rotation matrix from Euler angles (XYZ order, Unity convention)
+    rx, ry, rz = np.radians(map_rot)
+    Rx = np.array([[1, 0, 0], [0, np.cos(rx), -np.sin(rx)], [0, np.sin(rx), np.cos(rx)]])
+    Ry = np.array([[np.cos(ry), 0, np.sin(ry)], [0, 1, 0], [-np.sin(ry), 0, np.cos(ry)]])
+    Rz = np.array([[np.cos(rz), -np.sin(rz), 0], [np.sin(rz), np.cos(rz), 0], [0, 0, 1]])
+    R_map = Rz @ Ry @ Rx  # Unity uses ZYX order for applying rotations
+    R_map_inv = R_map.T
+
+    nerf_frames = []
+    for i, frame in enumerate(frames):
+        p = frame['camPos']
+        q = frame['camRot']
+
+        # Convert Unity camera pose to NeRF/Blender transform_matrix
+        qx, qy, qz, qw = q['x'], q['y'], q['z'], q['w']
+        R_unity = quat_to_mat(qx, qy, qz, qw)
+        C_unity = np.array([p['x'], p['y'], p['z']])
+
+        # 1. Normalize position using shared function
+        C_local = normalize_position(C_unity, map_transform)
+
+        # 2. Normalize rotation (undo map rotation)
+        R_local = R_map_inv @ R_unity
+
+        # 2. Unity (LHS, Y-up) to NeRF/Blender (RHS, Y-up, Z-backward)
+        # NeRF convention: camera looks along -Z in its local frame
+        # Unity: X-right, Y-up, Z-forward (LHS)
+        # NeRF:  X-right, Y-up, Z-backward (RHS)
+        flip = np.array([
+            [1,  0,  0],
+            [0,  1,  0],
+            [0,  0, -1]
+        ])
+
+        R_nerf = flip @ R_local @ flip.T
+        C_nerf = flip @ C_local
+
+        # Build 4x4 camera-to-world transform matrix
+        transform = np.eye(4)
+        transform[:3, :3] = R_nerf
+        transform[:3, 3] = C_nerf
+
+        # File path (relative, without extension for Blender format compatibility)
+        base_name = os.path.splitext(frame['file_path'])[0]
+        file_path = f"./images/{base_name}"
+
+        nerf_frames.append({
+            "file_path": file_path,
+            "rotation": 0.0,
+            "time": frame['time'],
+            "transform_matrix": transform.tolist()
+        })
+
+    output_data = {
+        "camera_angle_x": camera_angle_x,
+        "frames": nerf_frames
+    }
+
+    # Write all three splits (train, test, val)
+    for split in ['train', 'test', 'val']:
+        json_path = os.path.join(output_dir, f"transforms_{split}.json")
+        with open(json_path, 'w') as f:
+            json.dump(output_data, f, indent=4)
+
+
+def quat_to_mat(x, y, z, w):
+    """Converts a quaternion to a 3x3 rotation matrix."""
+    return np.array([
+        [1 - 2*y*y - 2*z*z, 2*x*y - 2*z*w,     2*x*z + 2*y*w],
+        [2*x*y + 2*z*w,     1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w],
+        [2*x*z - 2*y*w,     2*y*z + 2*x*w,     1 - 2*x*x - 2*y*y]
+    ])
+
+def mat_to_quat(R):
+    """Converts a 3x3 rotation matrix to a quaternion (w, x, y, z)."""
+    tr = np.trace(R)
+    if tr > 0:
+        S = math.sqrt(tr + 1.0) * 2
+        qw = 0.25 * S
+        qx = (R[2, 1] - R[1, 2]) / S
+        qy = (R[0, 2] - R[2, 0]) / S
+        qz = (R[1, 0] - R[0, 1]) / S
+    elif (R[0, 0] > R[1, 1]) and (R[0, 0] > R[2, 2]):
+        S = math.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2
+        qw = (R[2, 1] - R[1, 2]) / S
+        qx = 0.25 * S
+        qy = (R[0, 1] + R[1, 0]) / S
+        qz = (R[0, 2] + R[2, 0]) / S
+    elif R[1, 1] > R[2, 2]:
+        S = math.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2
+        qw = (R[0, 2] - R[2, 0]) / S
+        qx = (R[0, 1] + R[1, 0]) / S
+        qy = 0.25 * S
+        qz = (R[1, 2] + R[2, 1]) / S
+    else:
+        S = math.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
+        qw = (R[1, 0] - R[0, 1]) / S
+        qx = (R[0, 2] + R[2, 0]) / S
+        qy = (R[1, 2] + R[2, 1]) / S
+        qz = 0.25 * S
+    return qw, qx, qy, qz
