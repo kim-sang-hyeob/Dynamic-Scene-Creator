@@ -1,0 +1,20 @@
+name: "original"
+pretty_name: "Original 3DGS (Inria)"
+description: "Standard implementation. High quality, 24GB VRAM required for training."
+repo_url: "https://github.com/graphdeco-inria/gaussian-splatting"
+vram_usage: "24GB"
+install_dir: "external/gaussian-splatting"
+
+setup:
+  - cmd: "git clone --recursive {repo_url} {install_dir}"
+    check_exists: "{install_dir}"
+  - cmd: "git submodule update --init --recursive"
+    cwd: "{install_dir}"
+  - cmd: "{python} -m pip install ./submodules/diff-gaussian-rasterization"
+    cwd: "{install_dir}"
+  - cmd: "{python} -m pip install ./submodules/simple-knn"
+    cwd: "{install_dir}"
+
+train:
+  command: "{python} train.py -s {scene_path} -m {output_path} {extra_args}"
+  cwd: "{install_dir}"

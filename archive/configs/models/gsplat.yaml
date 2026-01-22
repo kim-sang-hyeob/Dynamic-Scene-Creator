@@ -1,0 +1,17 @@
+name: "gsplat"
+pretty_name: "gsplat (Nerfstudio)"
+description: "Memory efficient (6GB VRAM), faster training, easy customization."
+repo_url: "https://github.com/nerfstudio-project/gsplat"
+vram_usage: "6GB"
+install_dir: "external/gsplat"
+
+setup:
+  - cmd: "{python} -m pip install gsplat"
+    # No clone needed if we use pip, but keeping it for examples if user wants
+  - cmd: "git clone {repo_url} {install_dir}"
+    check_exists: "{install_dir}"
+
+train:
+  # Using the example trainer from the repo
+  command: "{python} {install_dir}/examples/simple_trainer.py --data_dir {scene_path} --result_dir {output_path} {extra_args}"
+  cwd: "{install_dir}"

@@ -1,0 +1,22 @@
+name: "vggt"
+pretty_name: "VGGT"
+description: "Visual Geometry Grounded Transformer (CVPR 2025 Best Paper). High-fidelity SfM-free reconstruction."
+repo_url: "https://github.com/facebookresearch/vggt.git"
+vram_usage: "16GB+"
+install_dir: "external/vggt"
+
+setup:
+  - cmd: "git clone {repo_url} {install_dir}"
+    check_exists: "{install_dir}"
+  - cmd: "{python} -m pip install -e . --no-deps"
+    cwd: "{install_dir}"
+  - cmd: "apt update && apt install -y libeigen3-dev pybind11-dev cmake g++"
+  - cmd: "{python} -m pip install huggingface_hub pycocotools timm einops omegaconf pycolmap==0.6.1 pybind11-stubgen trimesh kornia hydra-core"
+  - cmd: "{python} -m pip install git+https://github.com/cvg/LightGlue.git --no-deps"
+  - cmd: "{python} -m pip install git+https://github.com/vLarsson/PoseLib.git"
+
+# VGGT specific processing params
+process:
+  model_name: "facebook/vggt-1b"
+  image_size: 512
+  batch_size: 1

@@ -1,0 +1,64 @@
+# =============================================================================
+# 4DGS Project - Git Ignore
+# =============================================================================
+
+# External models (must be cloned & compiled on each server)
+external/
+
+# Training outputs
+output/
+
+# Data files (manage separately)
+data/**/*.mp4
+data/**/*.avi
+data/**/*.mov
+data/**/images/
+data/**/sparse/
+data/**/point_cloud/
+
+# Keep data folder structure
+!data/.gitkeep
+!data/*/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+tensorboard/
+
+# Temporary
+*.tmp
+*.temp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Rerun recordings (can be large)
+*.rrd
+
+# Claude Code (local only)
+.claude/

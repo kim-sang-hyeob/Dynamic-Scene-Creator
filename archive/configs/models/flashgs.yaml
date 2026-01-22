@@ -1,0 +1,16 @@
+name: "flashgs"
+pretty_name: "FlashGS"
+description: "Optimized for large scenes and high-res rendering."
+repo_url: "https://github.com/InternLandMark/FlashGS"
+vram_usage: "Low (efficient)"
+install_dir: "external/flashgs"
+
+setup:
+  - cmd: "git clone --recursive {repo_url} {install_dir}"
+    check_exists: "{install_dir}"
+  - cmd: "{python} -m pip install ."
+    cwd: "{install_dir}"
+
+train:
+  command: "{python} train.py -s {scene_path} -m {output_path} {extra_args}"
+  cwd: "{install_dir}"

@@ -1,0 +1,26 @@
+name: "dust3r"
+pretty_name: "DUSt3R"
+description: "Dense Unconstrained Stereo 3D Reconstruction (SfM-free pose estimation)."
+repo_url: "https://github.com/naver/dust3r.git"
+vram_usage: "12GB+"
+install_dir: "external/dust3r"
+
+setup:
+  - cmd: "git clone --recursive {repo_url} {install_dir}"
+    check_exists: "{install_dir}"
+  - cmd: "git submodule update --init --recursive"
+    cwd: "{install_dir}"
+  - cmd: "grep -vE 'torch|torchvision' requirements.txt > requirements_safe.txt && {python} -m pip install -r requirements_safe.txt"
+    cwd: "{install_dir}"
+  - cmd: "{python} -m pip install trimesh pyrender opencv-python"
+  - cmd: "mkdir -p checkpoints"
+    cwd: "{install_dir}"
+  - cmd: "wget -O checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth https://download.europe.naverlabs.com/ComputerVision/DUSt3R/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+    cwd: "{install_dir}"
+    check_exists: "{install_dir}/checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+
+# For Dust3R, 'train' command actually refers to the inference/processing logic
+process:
+  image_size: 512
+  batch_size: 1
+  alignment_iterations: 300
