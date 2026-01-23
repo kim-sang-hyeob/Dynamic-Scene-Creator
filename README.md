@@ -56,9 +56,9 @@ Unity Scene → Camera Tracking JSON → Diffusion Video Generation
 git clone <your-repo-url>
 cd pro-cv-finalproject-cv-09
 
-# 2. 자동 설치 (권장)
+# 2. 자동 설치 (권장, root로 실행)
 chmod +x scripts/setup_server.sh
-sudo ./scripts/setup_server.sh
+./scripts/setup_server.sh
 
 # 또는 Python 명령어로 실행
 python manage.py setup-server
@@ -67,9 +67,9 @@ python manage.py setup-server
 ### 수동 설치
 
 ```bash
-# CUDA 11.8 설치 (V100 필수)
-sudo apt-get update
-sudo apt-get install -y cuda-nvcc-11-8
+# CUDA 11.8 설치 (V100 필수, root로 실행)
+apt-get update
+apt-get install -y cuda-nvcc-11-8
 
 # 환경 변수 설정
 export CUDA_HOME=/usr/local/cuda-11.8

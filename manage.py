@@ -245,9 +245,9 @@ Examples:
                 ])
 
             for cmd in system_cmds:
-                print(f"  $ sudo {cmd}")
+                print(f"  $ {cmd}")
                 try:
-                    subprocess.run(f"sudo {cmd}", shell=True, check=True)
+                    subprocess.run(cmd, shell=True, check=True)
                 except subprocess.CalledProcessError as e:
                     print(f"  [Warning] Command failed: {e}")
         else:

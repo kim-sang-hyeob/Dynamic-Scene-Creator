@@ -4,9 +4,9 @@
 # Colmap-free Unity→4DGS Pipeline - Server Environment Setup
 # =============================================================================
 #
-# Usage:
+# Usage (run as root):
 #   chmod +x scripts/setup_server.sh
-#   sudo ./scripts/setup_server.sh [--with-vggt]
+#   ./scripts/setup_server.sh [--with-vggt]
 #
 # Options:
 #   --with-vggt    Also setup VGGT model (optional, requires more VRAM)
