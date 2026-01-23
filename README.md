@@ -54,7 +54,7 @@ Unity Scene → Camera Tracking JSON → Diffusion Video Generation
 ```bash
 # 1. 레포지토리 클론
 git clone <your-repo-url>
-cd 4dgs_project
+cd pro-cv-finalproject-cv-09
 
 # 2. 자동 설치 (권장)
 chmod +x scripts/setup_server.sh
