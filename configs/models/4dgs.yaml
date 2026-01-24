@@ -20,8 +20,11 @@ setup:
     cwd: "{install_dir}"
   - cmd: "export CUDA_HOME={cuda_home} && {python} -m pip install submodules/simple-knn --no-build-isolation --no-deps"
     cwd: "{install_dir}"
-  # Installing essential libraries individually to avoid heavy dependency resolution
-  - cmd: "{python} -m pip install lpips tqdm plyfile opencv-python-headless scipy tensorboard open3d plotly dash flask narwhals importlib-metadata joblib python-dateutil pytz pyparsing cycler kiwisolver fonttools scikit-learn addict configargparse pandas matplotlib rerun-sdk \"numpy<2.0\" --no-deps"
+  # Core 4DGS dependencies only (minimal set for training)
+  - cmd: "{python} -m pip install lpips tqdm plyfile --no-deps"
+  - cmd: "{python} -m pip install opencv-python-headless scipy tensorboard --no-deps"
+  # Optional: visualization packages (can be skipped if causing issues)
+  # - cmd: "{python} -m pip install open3d rerun-sdk --no-deps"
   # Patch dataset_readers.py to support CAMERA_ANGLE_OFFSET environment variable for custom camera rendering
   - cmd: "{python} src/patch_4dgs_camera_offset.py {install_dir}/scene/dataset_readers.py"
 
