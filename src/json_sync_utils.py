@@ -38,10 +38,13 @@ def save_map_transform(project_dir, map_transform):
         json.dump(data, f, indent=4)
     print(f"[JSON-Sync] Saved map_transform to {map_transform_path}")
 
-def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None):
+def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None, resize=None):
     """
     Synchronizes the JSON tracking data (from original video) with the Diffusion-generated video.
     Diffusion video is often faster (sped up) than the original tracking sequence.
+
+    Args:
+        resize: Optional tuple (width, height) or float scale factor (e.g., 0.5 for half size)
     """
     # Ensure absolute paths for safety on server
     output_dir = os.path.abspath(output_dir)
@@ -90,7 +93,21 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
     # Time mapping: Video diffusion compresses entire original into shorter output
     time_scale = duration_orig / duration_out
     print(f"[JSON-Sync] Time scale: {time_scale:.3f}x (diffusion sped up the video)")
-    
+
+    # Parse resize parameter
+    resize_dims = None
+    if resize is not None:
+        if isinstance(resize, (int, float)) and resize != 1.0:
+            # Scale factor (e.g., 0.5)
+            orig_w = int(cap_out.get(cv2.CAP_PROP_FRAME_WIDTH))
+            orig_h = int(cap_out.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            resize_dims = (int(orig_w * resize), int(orig_h * resize))
+            print(f"[JSON-Sync] Resizing frames: {orig_w}x{orig_h} -> {resize_dims[0]}x{resize_dims[1]} (scale={resize})")
+        elif isinstance(resize, (tuple, list)) and len(resize) == 2:
+            # Explicit dimensions (width, height)
+            resize_dims = (int(resize[0]), int(resize[1]))
+            print(f"[JSON-Sync] Resizing frames to: {resize_dims[0]}x{resize_dims[1]}")
+
     # 3. Process Frames
     extracted_frames = []
     print(f"[JSON-Sync] Extracting {total_frames_out} frames to {img_dir}...")
@@ -119,7 +136,11 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
                 break
         
         target_json = json_frames[closest_idx]
-        
+
+        # Resize frame if requested
+        if resize_dims is not None:
+            frame = cv2.resize(frame, resize_dims, interpolation=cv2.INTER_AREA)
+
         # Save Frame
         frame_name = f"{i:04d}.png"
         save_path = os.path.join(img_dir, frame_name)

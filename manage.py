@@ -81,6 +81,8 @@ Examples:
                               help="Map position override: x,y,z (default: from map_transform.json or built-in)")
     parser_unity.add_argument("--map-scale", type=str, default=None,
                               help="Map scale override: x,y,z (default: from map_transform.json or built-in)")
+    parser_unity.add_argument("--resize", type=str, default=None,
+                              help="Resize images: scale (e.g., 0.5) or WxH (e.g., 384x216)")
 
     # Command: train
     parser_train = subparsers.add_parser("train", parents=[parent_parser],
@@ -164,7 +166,18 @@ Examples:
                 'scale': np.array([float(x) for x in args.map_scale.split(',')]) if args.map_scale else np.array(DEFAULT_MAP_TRANSFORM['scale'])
             }
 
-        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform)
+        # Parse resize parameter
+        resize = None
+        if args.resize:
+            if 'x' in args.resize.lower():
+                # Format: WxH (e.g., 384x216)
+                w, h = args.resize.lower().split('x')
+                resize = (int(w), int(h))
+            else:
+                # Format: scale factor (e.g., 0.5)
+                resize = float(args.resize)
+
+        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize)
 
         if result:
             print(f"\n{'='*60}")
