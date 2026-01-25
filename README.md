@@ -83,6 +83,27 @@ pip install websockets
 python manage.py setup --model 4dgs
 ```
 
+## Quick Start
+
+```bash
+# 1. 데이터 처리 (프레임 수 제한 + 이미지 크기 축소로 VRAM 절약)
+python manage.py process-unity \
+    data/black_cat/output_cat.mp4 \
+    data/black_cat/full_data.json \
+    data/black_cat/original_catvideo.mp4 \
+    --output black_cat \
+    --frames 40 \
+    --resize 0.5
+
+# 2. 학습
+python manage.py train data/black_cat
+
+# 3. 렌더링 (45도 회전)
+CAMERA_ANGLE_OFFSET=45 python external/4dgs/render.py \
+    -m output/4dgs/black_cat \
+    --skip_train --skip_test
+```
+
 ## Usage
 
 ### 1. Unity 데이터 처리
@@ -94,8 +115,15 @@ python manage.py process-unity \
     data/black_cat/output_cat.mp4 \
     data/black_cat/full_data.json \
     data/black_cat/original_catvideo.mp4 \
-    --output black_cat
+    --output black_cat \
+    --frames 40 \
+    --resize 0.5
 ```
+
+**옵션:**
+- `--frames 40` - 균일 샘플링으로 40프레임 추출 (첫 프레임과 마지막 프레임 포함)
+- `--resize 0.5` - 이미지 크기를 50%로 축소 (VRAM 절약)
+- `--resize 384x216` - 또는 특정 해상도로 지정 가능
 
 **입력 파일:**
 - `output_cat.mp4` - Diffusion 모델로 생성된 비디오
@@ -254,6 +282,24 @@ python manage.py setup --model 4dgs
 | `clean-model` | PLY floater 제거 |
 | `list-models` | 사용 가능한 모델 목록 |
 | `setup-server` | 서버 환경 자동 설치 |
+
+### process-unity 옵션
+
+| 옵션 | 설명 | 예시 |
+|------|------|------|
+| `--output` | 출력 데이터셋 이름 (필수) | `--output black_cat` |
+| `--frames` | 균일 샘플링 프레임 수 (첫/끝 포함) | `--frames 40` |
+| `--resize` | 이미지 크기 조정 | `--resize 0.5` 또는 `--resize 384x216` |
+| `--map-pos` | 좌표 변환 위치 오버라이드 | `--map-pos "-150.85,-30.0,3.66"` |
+| `--map-scale` | 좌표 변환 스케일 오버라이드 | `--map-scale "3,3,3"` |
+
+### train 옵션
+
+| 옵션 | 설명 | 예시 |
+|------|------|------|
+| `--model` | 사용할 모델 (기본: 4dgs) | `--model 4dgs` |
+| `--extra` | 추가 학습 인자 | `--extra "--iterations 20000"` |
+| `--low-vram` | 저사양 모드 (batch_size=1, resolution=2) | `--low-vram` |
 
 ## Workflow Summary
 
