@@ -95,8 +95,8 @@ python manage.py process-unity \
     --frames 40 \
     --resize 0.5
 
-# 2. 학습
-python manage.py train data/black_cat
+# 2. 학습 (--low-vram: batch_size=1로 VRAM 절약)
+python manage.py train data/black_cat --low-vram
 
 # 3. 렌더링 (45도 회전)
 CAMERA_ANGLE_OFFSET=45 python external/4dgs/render.py \
@@ -299,7 +299,7 @@ python manage.py setup --model 4dgs
 |------|------|------|
 | `--model` | 사용할 모델 (기본: 4dgs) | `--model 4dgs` |
 | `--extra` | 추가 학습 인자 | `--extra "--iterations 20000"` |
-| `--low-vram` | 저사양 모드 (batch_size=1, resolution=2) | `--low-vram` |
+| `--low-vram` | 저사양 모드 (batch_size=1) | `--low-vram` |
 
 ## Workflow Summary
 

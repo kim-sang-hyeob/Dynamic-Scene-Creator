@@ -92,7 +92,7 @@ Examples:
     parser_train.add_argument("scene_path", help="Path to scene folder (e.g., data/black_cat)")
     parser_train.add_argument("--extra", default="", help="Extra arguments for training script")
     parser_train.add_argument("--low-vram", action="store_true",
-                              help="Low VRAM mode: batch_size=1, resolution=2")
+                              help="Low VRAM mode: batch_size=1")
 
     # Command: clean-model
     parser_clean = subparsers.add_parser("clean-model",
@@ -205,10 +205,10 @@ Examples:
         model_config = registry.get_model(args.model)
         extra_args = args.extra
         if args.low_vram:
-            # Low VRAM mode: reduce batch size and resolution
-            low_vram_args = "--batch_size 1 --resolution 2"
+            # Low VRAM mode: reduce batch size only (use --resize in process-unity for image size)
+            low_vram_args = "--batch_size 1"
             extra_args = f"{low_vram_args} {extra_args}".strip()
-            print("[Low VRAM Mode] Using: batch_size=1, resolution=2")
+            print("[Low VRAM Mode] Using: batch_size=1")
         Runner(global_config, model_config).train(args.scene_path, extra_args)
 
     elif args.command == "clean-model":
