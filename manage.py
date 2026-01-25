@@ -83,12 +83,16 @@ Examples:
                               help="Map scale override: x,y,z (default: from map_transform.json or built-in)")
     parser_unity.add_argument("--resize", type=str, default=None,
                               help="Resize images: scale (e.g., 0.5) or WxH (e.g., 384x216)")
+    parser_unity.add_argument("--frames", type=int, default=None,
+                              help="Limit number of frames (uniformly sampled, includes first and last)")
 
     # Command: train
     parser_train = subparsers.add_parser("train", parents=[parent_parser],
                                          help="Train 4DGS on prepared dataset")
     parser_train.add_argument("scene_path", help="Path to scene folder (e.g., data/black_cat)")
     parser_train.add_argument("--extra", default="", help="Extra arguments for training script")
+    parser_train.add_argument("--low-vram", action="store_true",
+                              help="Low VRAM mode: batch_size=1, resolution=2")
 
     # Command: clean-model
     parser_clean = subparsers.add_parser("clean-model",
@@ -177,7 +181,7 @@ Examples:
                 # Format: scale factor (e.g., 0.5)
                 resize = float(args.resize)
 
-        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize)
+        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize, max_frames=args.frames)
 
         if result:
             print(f"\n{'='*60}")
@@ -199,7 +203,13 @@ Examples:
 
     elif args.command == "train":
         model_config = registry.get_model(args.model)
-        Runner(global_config, model_config).train(args.scene_path, args.extra)
+        extra_args = args.extra
+        if args.low_vram:
+            # Low VRAM mode: reduce batch size and resolution
+            low_vram_args = "--batch_size 1 --resolution 2"
+            extra_args = f"{low_vram_args} {extra_args}".strip()
+            print("[Low VRAM Mode] Using: batch_size=1, resolution=2")
+        Runner(global_config, model_config).train(args.scene_path, extra_args)
 
     elif args.command == "clean-model":
         from src.filter_utils import clean_ply_model

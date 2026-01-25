@@ -38,13 +38,14 @@ def save_map_transform(project_dir, map_transform):
         json.dump(data, f, indent=4)
     print(f"[JSON-Sync] Saved map_transform to {map_transform_path}")
 
-def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None, resize=None):
+def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None, resize=None, max_frames=None):
     """
     Synchronizes the JSON tracking data (from original video) with the Diffusion-generated video.
     Diffusion video is often faster (sped up) than the original tracking sequence.
 
     Args:
         resize: Optional tuple (width, height) or float scale factor (e.g., 0.5 for half size)
+        max_frames: Optional int to limit number of frames (uniformly sampled, includes first and last)
     """
     # Ensure absolute paths for safety on server
     output_dir = os.path.abspath(output_dir)
@@ -108,21 +109,42 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
             resize_dims = (int(resize[0]), int(resize[1]))
             print(f"[JSON-Sync] Resizing frames to: {resize_dims[0]}x{resize_dims[1]}")
 
+    # Calculate which frames to extract (uniform sampling if max_frames specified)
+    if max_frames is not None and max_frames < total_frames_out:
+        # Uniform sampling: include first and last frame
+        # For N frames from M total: indices = [0, M/(N-1), 2*M/(N-1), ..., M-1]
+        frame_indices = []
+        for i in range(max_frames):
+            idx = int(i * (total_frames_out - 1) / (max_frames - 1)) if max_frames > 1 else 0
+            frame_indices.append(idx)
+        print(f"[JSON-Sync] Sampling {max_frames} frames uniformly from {total_frames_out} (first={frame_indices[0]}, last={frame_indices[-1]})")
+    else:
+        frame_indices = list(range(total_frames_out))
+
     # 3. Process Frames
     extracted_frames = []
-    print(f"[JSON-Sync] Extracting {total_frames_out} frames to {img_dir}...")
-    
+    print(f"[JSON-Sync] Extracting {len(frame_indices)} frames to {img_dir}...")
+
+    # Read all frames first if we're sampling
+    all_frames_data = []
     for i in range(total_frames_out):
         ret, frame = cap_out.read()
         if not ret:
             print(f"[Warning] Failed to read frame {i} from video.")
             break
-            
-        # Current time in output video
+        all_frames_data.append(frame)
+
+    for out_idx, i in enumerate(frame_indices):
+        if i >= len(all_frames_data):
+            print(f"[Warning] Frame index {i} out of range.")
+            break
+        frame = all_frames_data[i]
+
+        # Current time in output video (based on original frame index)
         t_out = i / fps_out
         # Corresponding time in the JSON/Original scale
         t_orig = t_out * time_scale
-        
+
         # Find closest frame in JSON (Binary search or simple look-up)
         # Assuming JSON is ordered by time
         closest_idx = 0
@@ -134,33 +156,35 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
                 closest_idx = j
             elif diff > min_diff: # Optimization: already passed the closest point
                 break
-        
+
         target_json = json_frames[closest_idx]
 
         # Resize frame if requested
         if resize_dims is not None:
             frame = cv2.resize(frame, resize_dims, interpolation=cv2.INTER_AREA)
 
-        # Save Frame
-        frame_name = f"{i:04d}.png"
+        # Save Frame (use sequential output index for clean naming)
+        frame_name = f"{out_idx:04d}.png"
         save_path = os.path.join(img_dir, frame_name)
         success = cv2.imwrite(save_path, frame)
         if not success:
             print(f"[Error] Failed to write frame to {save_path}")
-        elif i == 0:
+        elif out_idx == 0:
             print(f"[JSON-Sync] First frame saved successfully: {save_path}")
-        
+
+        # Normalized time for 4DGS (0 to 1 based on output sequence)
+        normalized_time = out_idx / (len(frame_indices) - 1) if len(frame_indices) > 1 else 0.0
+
         # Convert Camera Pose to COLMAP/3DGS format if needed
-        # (This is a simplified version, real 3DGS needs COLMAP sparse folder or transforms.json)
         extracted_frames.append({
             "file_path": frame_name,
-            "time": t_out / duration_out, # Normalized [0,1] for 4DGS
+            "time": normalized_time, # Normalized [0,1] for 4DGS
             "original_time": t_orig,
             "camPos": target_json['camPos'],
             "camRot": target_json['camRot'],
             "objPos": target_json.get('objPos', {'x':0, 'y':0, 'z':0})
         })
-        
+
     cap_out.release()
     cap_orig.release()
     
