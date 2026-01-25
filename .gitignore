@@ -65,3 +65,4 @@ tensorboard/
 
 # Archive (local reference only)
 archive/
+data/
