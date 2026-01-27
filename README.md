@@ -111,6 +111,7 @@ CAMERA_ANGLE_OFFSET=45 python external/4dgs/render.py \
 Unity에서 추출한 카메라 트래킹 JSON과 비디오를 4DGS 데이터셋으로 변환합니다.
 
 ```bash
+# 기본 사용법
 python manage.py process-unity \
     data/black_cat/output_cat.mp4 \
     data/black_cat/full_data.json \
@@ -118,12 +119,23 @@ python manage.py process-unity \
     --output black_cat \
     --frames 40 \
     --resize 0.5
+
+# 배경 제거 포함 (BiRefNet 사용)
+python manage.py process-unity \
+    data/black_cat/output_cat.mp4 \
+    data/black_cat/full_data.json \
+    data/black_cat/original_catvideo.mp4 \
+    --output black_cat_alpha \
+    --frames 40 \
+    --resize 0.5 \
+    --remove-bg
 ```
 
 **옵션:**
 - `--frames 40` - 균일 샘플링으로 40프레임 추출 (첫 프레임과 마지막 프레임 포함)
 - `--resize 0.5` - 이미지 크기를 50%로 축소 (VRAM 절약)
 - `--resize 384x216` - 또는 특정 해상도로 지정 가능
+- `--remove-bg` - BiRefNet으로 배경 제거 (투명 PNG 생성, 학습 시 `--white_background` 필요)
 
 **입력 파일:**
 - `output_cat.mp4` - Diffusion 모델로 생성된 비디오
@@ -331,6 +343,7 @@ python manage.py setup --model 4dgs
 | `--resize` | 이미지 크기 조정 | `--resize 0.5` 또는 `--resize 384x216` |
 | `--map-pos` | 좌표 변환 위치 오버라이드 | `--map-pos "-150.85,-30.0,3.66"` |
 | `--map-scale` | 좌표 변환 스케일 오버라이드 | `--map-scale "3,3,3"` |
+| `--remove-bg` | BiRefNet으로 배경 제거 | `--remove-bg` |
 
 ### train 옵션
 

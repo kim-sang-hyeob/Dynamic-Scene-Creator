@@ -85,6 +85,8 @@ Examples:
                               help="Resize images: scale (e.g., 0.5) or WxH (e.g., 384x216)")
     parser_unity.add_argument("--frames", type=int, default=None,
                               help="Limit number of frames (uniformly sampled, includes first and last)")
+    parser_unity.add_argument("--remove-bg", action="store_true",
+                              help="Remove background using BiRefNet (creates transparent PNGs)")
 
     # Command: train
     parser_train = subparsers.add_parser("train", parents=[parent_parser],
@@ -214,21 +216,24 @@ Examples:
                 # Format: scale factor (e.g., 0.5)
                 resize = float(args.resize)
 
-        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize, max_frames=args.frames)
+        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize, max_frames=args.frames, remove_bg=args.remove_bg)
 
         if result:
             print(f"\n{'='*60}")
             print(f"[SUCCESS] Dataset created at: {project_dir}")
             print(f"{'='*60}")
             print(f"\nGenerated files:")
-            print(f"  - images/           : Extracted frames")
+            print(f"  - images/           : {'Transparent PNGs (background removed)' if args.remove_bg else 'Extracted frames'}")
             print(f"  - sync_metadata.json: Frame-by-frame Unity data")
             print(f"  - transforms_*.json : Camera matrices (NeRF format)")
             print(f"  - timestamps.json   : Frame timestamps for 4DGS")
             print(f"  - map_transform.json: Coordinate conversion params")
             print(f"  - sparse/0/         : COLMAP-format (for compatibility)")
             print(f"\nNext steps:")
-            print(f"  1. Train: python manage.py train {args.output}")
+            if args.remove_bg:
+                print(f"  1. Train: python manage.py train {args.output} --extra=\"--white_background\"")
+            else:
+                print(f"  1. Train: python manage.py train {args.output}")
             print(f"  2. Render: CAMERA_ANGLE_OFFSET=45 python external/4dgs/render.py -m output/4dgs/{args.output} --skip_train --skip_test")
         else:
             print("[Error] Unity data processing failed.")

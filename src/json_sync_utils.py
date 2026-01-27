@@ -38,7 +38,7 @@ def save_map_transform(project_dir, map_transform):
         json.dump(data, f, indent=4)
     print(f"[JSON-Sync] Saved map_transform to {map_transform_path}")
 
-def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None, resize=None, max_frames=None):
+def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None, resize=None, max_frames=None, remove_bg=False):
     """
     Synchronizes the JSON tracking data (from original video) with the Diffusion-generated video.
     Diffusion video is often faster (sped up) than the original tracking sequence.
@@ -46,6 +46,7 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
     Args:
         resize: Optional tuple (width, height) or float scale factor (e.g., 0.5 for half size)
         max_frames: Optional int to limit number of frames (uniformly sampled, includes first and last)
+        remove_bg: If True, remove background using BiRefNet (creates transparent PNGs)
     """
     # Ensure absolute paths for safety on server
     output_dir = os.path.abspath(output_dir)
@@ -56,10 +57,22 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
     print(f"[JSON-Sync] Base output directory: {output_dir}")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
+
     img_dir = os.path.join(output_dir, "images")
     os.makedirs(img_dir, exist_ok=True)
-    
+
+    # Initialize background remover if requested
+    bg_remover = None
+    if remove_bg:
+        print(f"[JSON-Sync] Background removal enabled, loading BiRefNet...")
+        try:
+            from src.background_remover import BiRefNetRemover
+            bg_remover = BiRefNetRemover()
+        except ImportError as e:
+            print(f"[Error] Failed to load BiRefNet: {e}")
+            print("[Error] Install with: pip install transformers<4.40 timm einops kornia")
+            return False
+
     # 1. Load JSON data
     if not os.path.exists(json_path):
         print(f"[Error] JSON file not found: {json_path}")
@@ -163,14 +176,29 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
         if resize_dims is not None:
             frame = cv2.resize(frame, resize_dims, interpolation=cv2.INTER_AREA)
 
-        # Save Frame (use sequential output index for clean naming)
-        frame_name = f"{out_idx:04d}.png"
-        save_path = os.path.join(img_dir, frame_name)
-        success = cv2.imwrite(save_path, frame)
+        # Apply background removal if enabled
+        if bg_remover is not None:
+            rgba = bg_remover.remove_background(frame)
+            # Save as PNG with alpha channel
+            frame_name = f"{out_idx:04d}.png"
+            save_path = os.path.join(img_dir, frame_name)
+            from PIL import Image
+            Image.fromarray(rgba).save(save_path)
+            success = True
+        else:
+            # Save Frame (use sequential output index for clean naming)
+            frame_name = f"{out_idx:04d}.png"
+            save_path = os.path.join(img_dir, frame_name)
+            success = cv2.imwrite(save_path, frame)
+
         if not success:
             print(f"[Error] Failed to write frame to {save_path}")
         elif out_idx == 0:
             print(f"[JSON-Sync] First frame saved successfully: {save_path}")
+
+        # Progress reporting (especially useful for slow background removal)
+        if bg_remover is not None and (out_idx + 1) % 10 == 0:
+            print(f"[JSON-Sync] Progress: {out_idx + 1}/{len(frame_indices)} frames processed")
 
         # Normalized time for 4DGS (0 to 1 based on output sequence)
         normalized_time = out_idx / (len(frame_indices) - 1) if len(frame_indices) > 1 else 0.0
