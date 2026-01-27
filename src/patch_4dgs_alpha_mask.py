@@ -60,7 +60,7 @@ def patch_camera_utils(file_path):
     # [ALPHA PATCH] Extract alpha channel from RGBA images for background masking
     gt_alpha_mask = None
     if cam_info.image.shape[0] == 4:
-        gt_alpha_mask = cam_info.image[3:4, :, :]
+        gt_alpha_mask = cam_info.image[3:4, :, :].clone()  # Clone to avoid memory issues
 """
         return func_def + alpha_code + "\n    " + return_stmt
 
