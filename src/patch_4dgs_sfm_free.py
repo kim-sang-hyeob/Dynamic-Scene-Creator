@@ -20,7 +20,11 @@ PATCH_MARKER = "[SfM-FREE PATCH]"
 
 PATCH_CODE = '''
     # [SfM-FREE PATCH] Generate random initial points if no SfM points exist
-    if xyz is None or len(xyz) == 0:
+    try:
+        _xyz_exists = xyz is not None and len(xyz) > 0
+    except (NameError, UnboundLocalError):
+        _xyz_exists = False
+    if not _xyz_exists:
         import numpy as np
         print("[SfM-FREE] No SfM points found. Generating random initial points...")
         np.random.seed(42)
