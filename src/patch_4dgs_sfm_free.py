@@ -18,20 +18,21 @@ import re
 
 PATCH_MARKER = "[SfM-FREE PATCH]"
 
-PATCH_CODE = '''
-    # [SfM-FREE PATCH] Generate random initial points if no SfM points exist
-    try:
-        _xyz_exists = xyz is not None and len(xyz) > 0
-    except (NameError, UnboundLocalError):
-        _xyz_exists = False
-    if not _xyz_exists:
-        import numpy as np
-        print("[SfM-FREE] No SfM points found. Generating random initial points...")
-        np.random.seed(42)
-        num_pts = 1000
-        xyz = np.random.randn(num_pts, 3).astype(np.float32) * 0.5  # Random points around origin
-        rgb = np.random.randint(128, 255, size=(num_pts, 3)).astype(np.uint8)
-        print(f"[SfM-FREE] Generated {num_pts} random initial points")
+# Patch code template - {indent} will be replaced with actual indentation
+PATCH_CODE_TEMPLATE = '''
+{indent}# [SfM-FREE PATCH] Generate random initial points if no SfM points exist
+{indent}try:
+{indent}    _xyz_exists = xyz is not None and len(xyz) > 0
+{indent}except (NameError, UnboundLocalError):
+{indent}    _xyz_exists = False
+{indent}if not _xyz_exists:
+{indent}    import numpy as np
+{indent}    print("[SfM-FREE] No SfM points found. Generating random initial points...")
+{indent}    np.random.seed(42)
+{indent}    num_pts = 1000
+{indent}    xyz = np.random.randn(num_pts, 3).astype(np.float32) * 0.5
+{indent}    rgb = np.random.randint(128, 255, size=(num_pts, 3)).astype(np.uint8)
+{indent}    print(f"[SfM-FREE] Generated {{num_pts}} random initial points")
 '''
 
 
@@ -63,10 +64,16 @@ def patch_dataset_readers(file_path):
     indent = match.group(1)
     store_ply_call = match.group(2)
 
+    # Remove leading newline from indent (keep only spaces/tabs)
+    base_indent = indent.lstrip('\n')
+
+    # Generate patch code with correct indentation
+    patch_code = PATCH_CODE_TEMPLATE.format(indent=base_indent)
+
     # Insert the patch code before storePly
     patched_content = content.replace(
         f"{indent}{store_ply_call}",
-        f"{PATCH_CODE}\n{indent}{store_ply_call}"
+        f"{patch_code}\n{indent}{store_ply_call}"
     )
 
     # Write the patched file
