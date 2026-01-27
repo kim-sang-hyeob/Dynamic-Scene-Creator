@@ -286,6 +286,78 @@ CAMERA_ANGLE_OFFSET=45 CAMERA_ROTATION_CENTER="0.5,0.3,-1.2" \
     python external/4dgs/render.py -m output/4dgs/black_cat --skip_train --skip_test
 ```
 
+## Technical Notes
+
+### PNG 투명도와 4DGS의 Alpha 처리
+
+투명 PNG 이미지를 4DGS에서 학습할 때 알아야 할 중요한 사항입니다.
+
+#### PNG Alpha Channel의 구조
+
+PNG 이미지는 4개 채널로 구성됩니다:
+```
+픽셀 = [R, G, B, A]
+        ↑        ↑
+      색상값   투명도 (0=투명, 1=불투명)
+```
+
+**핵심 포인트**: Alpha=0 (투명)이어도 R, G, B 값은 **그대로 저장**됩니다.
+
+```python
+# 예: BiRefNet으로 배경 제거 후
+# 배경 픽셀: R=128, G=130, B=125, A=0
+# 이미지 뷰어에서는 안 보이지만 RGB 데이터는 존재!
+```
+
+#### 원본 4DGS의 문제점
+
+원본 4DGS(hustvl/4DGaussians)는 alpha 채널을 **무시**합니다:
+
+```python
+# camera_utils.py (원본)
+return Camera(..., gt_alpha_mask=None, ...)  # Alpha 무시!
+
+# cameras.py (원본)
+self.original_image = image[:3,:,:]  # RGB만 사용, Alpha 버림
+```
+
+결과: 투명 PNG를 사용해도 배경의 RGB 값이 그대로 학습됨 → 배경 형체가 point cloud에 나타남
+
+#### 우리의 해결책 (Alpha Patch + Loss Mask Patch)
+
+**1. Alpha Patch** (`patch_4dgs_alpha_mask.py`)
+- Alpha 채널 추출
+- GT 이미지를 흰색 배경에 합성 (--white_background와 매칭)
+
+```python
+# cameras.py (패치 후)
+if gt_alpha_mask is not None:
+    # RGB * alpha + white * (1 - alpha)
+    self.original_image = self.original_image * gt_alpha_mask + (1.0 - gt_alpha_mask)
+```
+
+**2. Loss Mask Patch** (`patch_4dgs_loss_mask.py`)
+- Loss 계산에서 배경 픽셀 제외
+- 배경에 Gaussian이 형성되지 않음
+
+```python
+# train.py (패치 후)
+mask_binary = (combined_mask > 0.5).float()
+Ll1 = torch.abs(render * mask - gt * mask).sum() / mask.sum()
+```
+
+| 영역 | Alpha | Loss 계산 | Gaussian 형성 |
+|------|-------|-----------|---------------|
+| 전경 (객체) | 1.0 | O | O |
+| 배경 | 0.0 | X | X |
+
+#### 사용법
+
+```bash
+# 배경 제거된 데이터 학습
+python manage.py train data/my_scene_alpha --low-vram --extra="--white_background"
+```
+
 ## Troubleshooting
 
 ### CUDA 버전 문제
