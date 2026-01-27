@@ -144,6 +144,21 @@ Examples:
     parser_vis.add_argument("--web", action="store_true", help="Serve over web")
     parser_vis.add_argument("--save", help="Save to .rrd file")
 
+    # Command: trajectory - Visualize Gaussian trajectories over time
+    parser_traj = subparsers.add_parser("trajectory",
+                                        help="Visualize 4DGS Gaussian trajectories over time")
+    parser_traj.add_argument("model_path", help="Path to trained model (e.g., output/4dgs/black_cat)")
+    parser_traj.add_argument("--num-points", type=int, default=500,
+                             help="Number of points to track (default: 500)")
+    parser_traj.add_argument("--num-steps", type=int, default=10,
+                             help="Number of time steps (default: 10)")
+    parser_traj.add_argument("--output", type=str, default=None,
+                             help="Output PLY file for trajectories")
+    parser_traj.add_argument("--rerun", action="store_true",
+                             help="Visualize with Rerun")
+    parser_traj.add_argument("--stats-only", action="store_true",
+                             help="Only compute movement statistics")
+
     # Command: list-models
     subparsers.add_parser("list-models", help="List available model configurations")
 
@@ -336,6 +351,29 @@ Examples:
     elif args.command == "visualize":
         from src.rerun_vis import run_visualization
         run_visualization(args.dir, watch=args.watch, web=args.web, save_path=args.save)
+
+    elif args.command == "trajectory":
+        from src.visualize_trajectory import load_gaussian_model, compute_trajectories, compute_movement_stats, save_trajectories_ply, visualize_with_rerun
+        try:
+            gaussians, deform, iteration = load_gaussian_model(args.model_path)
+            trajectories, times, indices = compute_trajectories(
+                gaussians, deform,
+                num_points=args.num_points,
+                num_time_steps=args.num_steps
+            )
+            stats = compute_movement_stats(trajectories, times)
+
+            if not args.stats_only:
+                output_path = args.output or os.path.join(args.model_path, f"trajectories_iter{iteration}.ply")
+                save_trajectories_ply(trajectories, times, output_path)
+
+                if args.rerun:
+                    visualize_with_rerun(trajectories, times, indices)
+        except Exception as e:
+            print(f"[Error] {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
 
     elif args.command == "list-models":
         print(f"\n{'Model':<15} | {'VRAM':<10} | Description")
