@@ -94,6 +94,39 @@ Examples:
     parser_train.add_argument("--low-vram", action="store_true",
                               help="Low VRAM mode: batch_size=1")
 
+    # Command: remove-bg (Background removal with BiRefNet)
+    parser_bg = subparsers.add_parser("remove-bg",
+        help="[NEW] Remove background from video frames using BiRefNet")
+    parser_bg.add_argument("video", help="Input video path")
+    parser_bg.add_argument("--output", required=True, help="Output directory for transparent images")
+    parser_bg.add_argument("--model", choices=["birefnet", "rembg"], default="birefnet",
+                           help="Background removal model (default: birefnet)")
+    parser_bg.add_argument("--frames", type=int, default=None,
+                           help="Max number of frames (uniform sampling)")
+    parser_bg.add_argument("--resize", type=str, default=None,
+                           help="Resize: scale (e.g., 0.5) or WxH (e.g., 512x295)")
+
+    # Command: prepare-alpha (Full pipeline: remove-bg + create sparse)
+    parser_alpha = subparsers.add_parser("prepare-alpha",
+        help="[NEW] Full pipeline: remove background + create COLMAP sparse files")
+    parser_alpha.add_argument("video", help="Input video path")
+    parser_alpha.add_argument("--output", required=True, help="Output dataset name (e.g., black_cat_alpha)")
+    parser_alpha.add_argument("--model", choices=["birefnet", "rembg"], default="birefnet",
+                              help="Background removal model (default: birefnet)")
+    parser_alpha.add_argument("--frames", type=int, default=None,
+                              help="Max number of frames (uniform sampling)")
+    parser_alpha.add_argument("--resize", type=str, default=None,
+                              help="Resize: scale (e.g., 0.5) or WxH (e.g., 512x295)")
+    parser_alpha.add_argument("--fov", type=float, default=50.0,
+                              help="Camera FOV in degrees (default: 50)")
+
+    # Command: create-sparse (Create COLMAP sparse from images)
+    parser_sparse = subparsers.add_parser("create-sparse",
+        help="Create COLMAP sparse files from images directory")
+    parser_sparse.add_argument("images_dir", help="Directory containing images")
+    parser_sparse.add_argument("--fov", type=float, default=50.0,
+                               help="Camera FOV in degrees (default: 50)")
+
     # Command: clean-model
     parser_clean = subparsers.add_parser("clean-model",
                                          help="Remove floaters from PLY using Statistical Outlier Removal")
@@ -215,6 +248,85 @@ Examples:
         from src.filter_utils import clean_ply_model
         output = args.output if args.output else args.ply_path.replace(".ply", "_cleaned.ply")
         clean_ply_model(args.ply_path, output, nb_neighbors=args.neighbors)
+
+    elif args.command == "remove-bg":
+        from src.background_remover import process_video
+
+        # Parse resize
+        resize = None
+        if args.resize:
+            if 'x' in args.resize.lower():
+                w, h = args.resize.lower().split('x')
+                resize = (int(w), int(h))
+            else:
+                resize = float(args.resize)
+
+        output_dir = os.path.join(data_root, args.output) if not os.path.isabs(args.output) else args.output
+        img_dir = os.path.join(output_dir, "images")
+
+        process_video(
+            args.video,
+            img_dir,
+            model_type=args.model,
+            max_frames=args.frames,
+            resize=resize
+        )
+
+        print(f"\n{'='*60}")
+        print(f"[SUCCESS] Background removed images saved to: {img_dir}")
+        print(f"{'='*60}")
+        print(f"\nNext steps:")
+        print(f"  1. Create sparse: python manage.py create-sparse {img_dir}")
+        print(f"  2. Train: python manage.py train {output_dir} --extra=\"--white_background\"")
+
+    elif args.command == "prepare-alpha":
+        from src.background_remover import process_video
+        from src.create_sparse_from_images import create_colmap_sparse
+
+        # Parse resize
+        resize = None
+        if args.resize:
+            if 'x' in args.resize.lower():
+                w, h = args.resize.lower().split('x')
+                resize = (int(w), int(h))
+            else:
+                resize = float(args.resize)
+
+        output_dir = os.path.join(data_root, args.output)
+        img_dir = os.path.join(output_dir, "images")
+
+        print(f"\n{'='*60}")
+        print(f" Prepare Alpha Pipeline")
+        print(f"{'='*60}")
+
+        # Step 1: Remove background
+        print(f"\n[1/2] Removing background using {args.model}...")
+        process_video(
+            args.video,
+            img_dir,
+            model_type=args.model,
+            max_frames=args.frames,
+            resize=resize
+        )
+
+        # Step 2: Create COLMAP sparse files
+        print(f"\n[2/2] Creating COLMAP sparse files...")
+        create_colmap_sparse(img_dir, fov=args.fov)
+
+        print(f"\n{'='*60}")
+        print(f"[SUCCESS] Dataset created at: {output_dir}")
+        print(f"{'='*60}")
+        print(f"\nGenerated files:")
+        print(f"  - images/         : Transparent PNG frames")
+        print(f"  - sparse/0/       : COLMAP format files")
+        print(f"  - timestamps.json : Frame timestamps for 4DGS")
+        print(f"\nNext step:")
+        print(f"  python manage.py train data/{args.output} --extra=\"--white_background\"")
+
+    elif args.command == "create-sparse":
+        from src.create_sparse_from_images import create_colmap_sparse
+        create_colmap_sparse(args.images_dir, fov=args.fov)
+        print(f"\n[Done] Sparse files created. Ready for training!")
 
     elif args.command == "visualize":
         from src.rerun_vis import run_visualization
