@@ -23,6 +23,8 @@ setup:
   # Installing essential libraries individually to avoid heavy dependency resolution
   # NOTE: open3d removed - causes server crashes during installation
   - cmd: "{python} -m pip install lpips tqdm plyfile opencv-python-headless scipy tensorboard plotly dash flask narwhals importlib-metadata joblib python-dateutil pytz pyparsing cycler kiwisolver fonttools scikit-learn addict configargparse pandas matplotlib imageio rerun-sdk \"numpy<2.0\" --no-deps"
+  # BiRefNet dependencies for background removal (prepare-alpha command)
+  - cmd: "{python} -m pip install transformers huggingface_hub safetensors --no-deps"
   # Patch 4DGS to work without open3d (removes open3d dependency from gaussian_model.py)
   - cmd: "{python} src/patch_4dgs_open3d.py {install_dir}"
   # Patch dataset_readers.py to support CAMERA_ANGLE_OFFSET environment variable for custom camera rendering
