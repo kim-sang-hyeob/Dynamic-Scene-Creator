@@ -138,7 +138,43 @@ python manage.py process-unity \
 - `map_transform.json` - 좌표 변환 파라미터
 - `sparse/0/` - COLMAP 호환 포맷
 
-### 2. 4DGS 학습
+### 2. 배경 제거 파이프라인 (Unity 없이)
+
+Unity 카메라 데이터 없이 비디오만으로 4DGS 학습을 위한 데이터셋을 생성합니다.
+BiRefNet을 사용하여 배경을 자동으로 제거하고, 고정 카메라 포즈로 COLMAP sparse 파일을 생성합니다.
+
+```bash
+# 전체 파이프라인 (배경 제거 + sparse 생성)
+python manage.py prepare-alpha data/my_video.mp4 \
+    --output my_scene_alpha \
+    --frames 40 \
+    --resize 512x295
+
+# 학습 (투명 배경용 --white_background 필수)
+python manage.py train data/my_scene_alpha --extra="--white_background"
+```
+
+**옵션:**
+- `--frames 40` - 균일 샘플링으로 40프레임 추출
+- `--resize 0.5` - 이미지 크기 50% 축소 (또는 `512x295` 형태)
+- `--fov 50` - 카메라 FOV 설정 (기본: 50도)
+- `--model birefnet` - 배경 제거 모델 (birefnet/rembg)
+
+**생성 파일:**
+- `images/` - 배경이 제거된 투명 PNG 프레임
+- `sparse/0/` - COLMAP 호환 포맷 (고정 카메라)
+- `timestamps.json` - 4DGS용 프레임 타임스탬프
+
+**개별 명령어:**
+```bash
+# 1. 배경 제거만
+python manage.py remove-bg data/my_video.mp4 --output data/my_scene/images
+
+# 2. sparse 파일 생성만
+python manage.py create-sparse data/my_scene/images --fov 50
+```
+
+### 3. 4DGS 학습
 
 ```bash
 python manage.py train data/black_cat
@@ -277,6 +313,9 @@ python manage.py setup --model 4dgs
 |--------|------|
 | `setup` | 4DGS 환경 설치 |
 | `process-unity` | Unity JSON + Video → 4DGS 데이터셋 |
+| `prepare-alpha` | 비디오 → 배경 제거 + sparse 생성 (Unity 없이) |
+| `remove-bg` | 비디오에서 배경 제거 (BiRefNet) |
+| `create-sparse` | 이미지 폴더 → COLMAP sparse 파일 |
 | `train` | 4DGS 모델 학습 |
 | `visualize` | Rerun 시각화 |
 | `clean-model` | PLY floater 제거 |
