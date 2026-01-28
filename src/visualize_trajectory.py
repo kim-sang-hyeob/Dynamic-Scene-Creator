@@ -20,10 +20,9 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'external', '4dgs'))
 
 
-def load_gaussian_model(model_path):
-    """Load trained 4DGS model."""
-    from scene.gaussian_model import GaussianModel
-    from argparse import Namespace
+def load_ply_points(model_path):
+    """Load point cloud from PLY file directly (without full GaussianModel)."""
+    from plyfile import PlyData
 
     # Find the latest checkpoint
     point_cloud_dir = os.path.join(model_path, "point_cloud")
@@ -46,98 +45,99 @@ def load_gaussian_model(model_path):
     latest_iter = max(iterations)
     ply_path = os.path.join(point_cloud_dir, f"iteration_{latest_iter}", "point_cloud.ply")
 
-    print(f"[Trajectory] Loading model from iteration {latest_iter}")
+    print(f"[Trajectory] Loading PLY from iteration {latest_iter}")
     print(f"[Trajectory] PLY path: {ply_path}")
 
-    # Initialize Gaussian model
-    # Load hyperparameters if available
-    sh_degree = 3  # Default
-    hyper_path = os.path.join(model_path, "cfg_args")
-    if os.path.exists(hyper_path):
-        import pickle
-        try:
-            with open(hyper_path, 'rb') as f:
-                cfg_args = pickle.load(f)
-            sh_degree = getattr(cfg_args, 'sh_degree', 3)
-        except Exception as e:
-            print(f"[Warning] Could not load cfg_args: {e}, using default sh_degree=3")
+    # Load PLY directly
+    plydata = PlyData.read(ply_path)
+    vertex = plydata['vertex']
 
-    gaussians = GaussianModel(sh_degree)
-    gaussians.load_ply(ply_path)
+    xyz = np.vstack([vertex['x'], vertex['y'], vertex['z']]).T
 
-    # Load deformation model if exists
-    deform_path = os.path.join(model_path, "deformation", f"iteration_{latest_iter}", "deformation.pth")
-    if os.path.exists(deform_path):
-        print(f"[Trajectory] Loading deformation model...")
-        from scene.deformation import DeformModel
-        deform = DeformModel()
-        deform.load_weights(model_path, latest_iter)
-        return gaussians, deform, latest_iter
-    else:
-        print(f"[Warning] No deformation model found at {deform_path}")
-        return gaussians, None, latest_iter
+    # Try to get opacity if available
+    opacity = None
+    if 'opacity' in vertex.data.dtype.names:
+        opacity = vertex['opacity']
+
+    return xyz, opacity, latest_iter
 
 
-def compute_trajectories(gaussians, deform, num_points=500, num_time_steps=10):
-    """Compute Gaussian trajectories over time."""
+def analyze_point_distribution(xyz, opacity=None):
+    """Analyze point cloud distribution to detect 'shadow clone' problem."""
 
-    # Get base positions
-    xyz = gaussians.get_xyz.detach().cpu().numpy()
     total_points = len(xyz)
+    print(f"\n[Analysis] Total Gaussians: {total_points}")
 
-    print(f"[Trajectory] Total Gaussians: {total_points}")
+    # Compute bounding box
+    xyz_min = xyz.min(axis=0)
+    xyz_max = xyz.max(axis=0)
+    xyz_range = xyz_max - xyz_min
 
-    # Sample points (random or by importance)
-    if num_points < total_points:
-        # Sample points with higher opacity
-        opacities = gaussians.get_opacity.detach().cpu().numpy().squeeze()
-        # Prioritize visible points
-        probs = np.clip(opacities, 0, 1)
-        probs = probs / probs.sum()
-        indices = np.random.choice(total_points, size=num_points, replace=False, p=probs)
+    print(f"\n[Analysis] Bounding Box:")
+    print(f"  X: {xyz_min[0]:.3f} ~ {xyz_max[0]:.3f} (range: {xyz_range[0]:.3f})")
+    print(f"  Y: {xyz_min[1]:.3f} ~ {xyz_max[1]:.3f} (range: {xyz_range[1]:.3f})")
+    print(f"  Z: {xyz_min[2]:.3f} ~ {xyz_max[2]:.3f} (range: {xyz_range[2]:.3f})")
+
+    # Compute center and spread
+    center = xyz.mean(axis=0)
+    distances_from_center = np.linalg.norm(xyz - center, axis=1)
+
+    print(f"\n[Analysis] Point Distribution:")
+    print(f"  Center: ({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})")
+    print(f"  Mean distance from center: {distances_from_center.mean():.3f}")
+    print(f"  Max distance from center: {distances_from_center.max():.3f}")
+    print(f"  Std of distances: {distances_from_center.std():.3f}")
+
+    # Check for elongated distribution (shadow clone symptom)
+    # If one axis is much larger than others, points may be spread along camera path
+    aspect_ratios = xyz_range / (xyz_range.min() + 1e-6)
+    max_aspect = aspect_ratios.max()
+    elongated_axis = ['X', 'Y', 'Z'][aspect_ratios.argmax()]
+
+    print(f"\n[Analysis] Shape Analysis:")
+    print(f"  Aspect ratios: X={aspect_ratios[0]:.2f}, Y={aspect_ratios[1]:.2f}, Z={aspect_ratios[2]:.2f}")
+    print(f"  Most elongated axis: {elongated_axis} ({max_aspect:.2f}x)")
+
+    if max_aspect > 5:
+        print(f"\n  ⚠️  WARNING: Point cloud is highly elongated along {elongated_axis} axis!")
+        print(f"     This may indicate 'shadow clone' problem (Gaussians spread along camera path)")
+        print(f"     Expected: compact object shape, Got: elongated distribution")
+    elif max_aspect > 3:
+        print(f"\n  ⚠️  CAUTION: Moderate elongation along {elongated_axis} axis")
     else:
-        indices = np.arange(total_points)
-        num_points = total_points
+        print(f"\n  ✓ Point cloud appears reasonably compact")
 
-    print(f"[Trajectory] Sampling {num_points} points")
+    # Cluster analysis (simplified)
+    # If there are multiple distinct clusters, it might indicate shadow clones
+    from scipy.cluster.hierarchy import fclusterdata
+    try:
+        if total_points > 100:
+            sample_idx = np.random.choice(total_points, min(1000, total_points), replace=False)
+            sample_xyz = xyz[sample_idx]
+        else:
+            sample_xyz = xyz
 
-    # Time steps
-    times = np.linspace(0, 1, num_time_steps)
+        # Cluster with distance threshold
+        clusters = fclusterdata(sample_xyz, t=xyz_range.max() * 0.1, criterion='distance')
+        n_clusters = len(np.unique(clusters))
 
-    # Compute trajectories
-    trajectories = np.zeros((num_points, num_time_steps, 3))
+        print(f"\n[Analysis] Cluster Analysis:")
+        print(f"  Detected clusters (threshold=10% of max range): {n_clusters}")
 
-    if deform is None:
-        # No deformation - static points
-        print("[Warning] No deformation model - showing static positions")
-        for t_idx in range(num_time_steps):
-            trajectories[:, t_idx, :] = xyz[indices]
-    else:
-        # Query deformation at each time step
-        device = next(deform.deformation.parameters()).device
+        if n_clusters > 5:
+            print(f"  ⚠️  Multiple clusters detected - possible shadow clones")
+        else:
+            print(f"  ✓ Point cloud appears to be a single connected object")
+    except Exception as e:
+        print(f"\n[Analysis] Cluster analysis skipped: {e}")
 
-        for t_idx, t in enumerate(times):
-            # Create time tensor
-            time_tensor = torch.tensor([t], device=device).float()
-
-            # Get positions for sampled points
-            xyz_tensor = torch.tensor(xyz[indices], device=device).float()
-
-            # Query deformation
-            with torch.no_grad():
-                # The deformation network takes (N, 3) positions and time
-                # and returns position offsets
-                try:
-                    d_xyz, _, _ = deform.step(xyz_tensor, time_tensor.expand(len(xyz_tensor), 1))
-                    deformed_xyz = xyz_tensor + d_xyz
-                    trajectories[:, t_idx, :] = deformed_xyz.cpu().numpy()
-                except Exception as e:
-                    print(f"[Warning] Deformation query failed at t={t:.2f}: {e}")
-                    trajectories[:, t_idx, :] = xyz[indices]
-
-            print(f"[Trajectory] Computed t={t:.2f} ({t_idx+1}/{num_time_steps})")
-
-    return trajectories, times, indices
+    return {
+        'total_points': total_points,
+        'bbox_range': xyz_range,
+        'center': center,
+        'max_aspect_ratio': max_aspect,
+        'elongated_axis': elongated_axis
+    }
 
 
 def save_trajectories_ply(trajectories, times, output_path):
@@ -259,54 +259,63 @@ def compute_movement_stats(trajectories, times):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Visualize 4DGS Gaussian trajectories")
+    parser = argparse.ArgumentParser(description="Analyze 4DGS Gaussian point cloud distribution")
     parser.add_argument("model_path", help="Path to trained model (e.g., output/4dgs/black_cat)")
-    parser.add_argument("--num-points", type=int, default=500,
-                        help="Number of points to track (default: 500)")
-    parser.add_argument("--num-steps", type=int, default=10,
-                        help="Number of time steps (default: 10)")
     parser.add_argument("--output", type=str, default=None,
-                        help="Output PLY file for trajectories")
-    parser.add_argument("--rerun", action="store_true",
-                        help="Visualize with Rerun")
+                        help="Output PLY file for visualization")
     parser.add_argument("--stats-only", action="store_true",
-                        help="Only compute statistics, no visualization")
+                        help="Only compute statistics, no file output")
 
     args = parser.parse_args()
 
-    # Load model
+    # Load PLY directly
     try:
-        gaussians, deform, iteration = load_gaussian_model(args.model_path)
+        xyz, opacity, iteration = load_ply_points(args.model_path)
     except Exception as e:
         print(f"[Error] Failed to load model: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
 
-    # Compute trajectories
-    trajectories, times, indices = compute_trajectories(
-        gaussians, deform,
-        num_points=args.num_points,
-        num_time_steps=args.num_steps
-    )
-
-    # Compute stats
-    stats = compute_movement_stats(trajectories, times)
+    # Analyze point distribution
+    stats = analyze_point_distribution(xyz, opacity)
 
     if args.stats_only:
         return
 
-    # Save PLY
+    # Save colored PLY for visualization
     if args.output:
         output_path = args.output
     else:
-        output_path = os.path.join(args.model_path, f"trajectories_iter{iteration}.ply")
+        output_path = os.path.join(args.model_path, f"analysis_iter{iteration}.ply")
 
-    save_trajectories_ply(trajectories, times, output_path)
+    # Color points by position along elongated axis
+    from plyfile import PlyData, PlyElement
 
-    # Visualize with Rerun
-    if args.rerun:
-        visualize_with_rerun(trajectories, times, indices)
+    axis_idx = ['X', 'Y', 'Z'].index(stats['elongated_axis'])
+    axis_vals = xyz[:, axis_idx]
+    normalized = (axis_vals - axis_vals.min()) / (axis_vals.max() - axis_vals.min() + 1e-6)
+
+    # Blue (low) to Red (high)
+    colors = np.zeros((len(xyz), 3), dtype=np.uint8)
+    colors[:, 0] = (normalized * 255).astype(np.uint8)  # Red
+    colors[:, 2] = ((1 - normalized) * 255).astype(np.uint8)  # Blue
+
+    vertex_data = np.zeros(len(xyz), dtype=[
+        ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+        ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')
+    ])
+    vertex_data['x'] = xyz[:, 0]
+    vertex_data['y'] = xyz[:, 1]
+    vertex_data['z'] = xyz[:, 2]
+    vertex_data['red'] = colors[:, 0]
+    vertex_data['green'] = colors[:, 1]
+    vertex_data['blue'] = colors[:, 2]
+
+    el = PlyElement.describe(vertex_data, 'vertex')
+    PlyData([el]).write(output_path)
+    print(f"\n[Output] Saved colored point cloud to {output_path}")
+    print(f"  Colors: Blue (low {stats['elongated_axis']}) → Red (high {stats['elongated_axis']})")
 
 
 if __name__ == "__main__":
