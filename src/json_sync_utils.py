@@ -394,12 +394,22 @@ def write_colmap_text(frames, output_dir, img_dir=None, map_transform=None):
 
         if has_alpha and os.path.exists(img_dir):
             print(f"[COLMAP] Generating foreground-based initial points from alpha masks...")
+
+            # Try to load MiDaS depth estimator for better depth estimation
+            depth_estimator = None
+            try:
+                from depth_estimator import DepthEstimator
+                depth_estimator = DepthEstimator("MiDaS_small")
+                print(f"[COLMAP] Using MiDaS for depth estimation (better point quality)")
+            except Exception as e:
+                print(f"[COLMAP] MiDaS not available ({e}), using distance-based depth")
+
             all_points = []
 
-            # Sample from a few frames (not all, to avoid too many points)
-            sample_frames = frames[::max(1, len(frames)//5)]  # Sample ~5 frames
+            # Sample from more frames for better coverage (10 frames instead of 5)
+            sample_frames = frames[::max(1, len(frames)//10)]
 
-            for frame in sample_frames:
+            for frame_idx, frame in enumerate(sample_frames):
                 img_path = os.path.join(img_dir, frame['file_path'])
                 img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
                 if img is None or img.shape[2] != 4:
@@ -413,8 +423,8 @@ def write_colmap_text(frames, output_dir, img_dir=None, map_transform=None):
                 if len(fx) == 0:
                     continue
 
-                # Sample up to 200 foreground pixels per frame
-                n_samples = min(200, len(fx))
+                # Sample up to 500 foreground pixels per frame (increased from 200)
+                n_samples = min(500, len(fx))
                 indices = np.random.choice(len(fx), n_samples, replace=False)
                 sampled_x = fx[indices]
                 sampled_y = fy[indices]
@@ -442,14 +452,39 @@ def write_colmap_text(frames, output_dir, img_dir=None, map_transform=None):
                 R_nerf = flip @ R_local @ flip.T
                 C_nerf = flip @ C_local
 
-                # Estimate depth: use distance to object or average depth
+                # Get reference depth (distance to object center)
                 obj_pos = frame.get('objPos', {'x': 0, 'y': 0, 'z': 0})
                 obj_unity = np.array([obj_pos['x'], obj_pos['y'], obj_pos['z']])
                 obj_local = normalize_position(obj_unity, map_transform)
                 obj_nerf = flip @ obj_local
-                estimated_depth = np.linalg.norm(obj_nerf - C_nerf)
-                if estimated_depth < 0.1:
-                    estimated_depth = 2.0  # Fallback depth
+                ref_depth = np.linalg.norm(obj_nerf - C_nerf)
+                if ref_depth < 0.1:
+                    ref_depth = 2.0  # Fallback depth
+
+                # Get per-pixel depth using MiDaS or fallback to uniform depth
+                if depth_estimator is not None:
+                    try:
+                        # Get relative depth map
+                        rel_depth_map = depth_estimator.estimate(img, normalize=True)
+
+                        # Scale relative depth to metric depth using reference distance
+                        # Median foreground depth should match reference depth
+                        fg_depths = rel_depth_map[foreground_mask]
+                        if len(fg_depths) > 0:
+                            median_rel = np.median(fg_depths)
+                            if median_rel > 0.01:
+                                depth_scale = ref_depth / median_rel
+                            else:
+                                depth_scale = ref_depth
+                        else:
+                            depth_scale = ref_depth
+
+                        use_midas_depth = True
+                    except Exception as e:
+                        print(f"[COLMAP] Depth estimation failed for {frame['file_path']}: {e}")
+                        use_midas_depth = False
+                else:
+                    use_midas_depth = False
 
                 # Back-project pixels to 3D
                 cx, cy = width / 2, height / 2
@@ -465,18 +500,27 @@ def write_colmap_text(frames, output_dir, img_dir=None, map_transform=None):
                     # Transform to world space
                     ray_dir_world = R_nerf @ ray_dir_cam
 
-                    # Place point at estimated depth with some random variation
-                    depth = estimated_depth * (0.8 + 0.4 * np.random.random())
-                    point_3d = C_nerf + ray_dir_world * depth
+                    # Get depth for this pixel
+                    if use_midas_depth:
+                        # Use MiDaS depth with small random variation
+                        pixel_depth = rel_depth_map[py, px] * depth_scale
+                        pixel_depth = pixel_depth * (0.95 + 0.1 * np.random.random())
+                    else:
+                        # Fallback: uniform depth with larger random variation
+                        pixel_depth = ref_depth * (0.8 + 0.4 * np.random.random())
+
+                    point_3d = C_nerf + ray_dir_world * pixel_depth
 
                     # Get color from image
                     b, g, r = img[py, px, :3]
                     all_points.append((point_3d, r, g, b))
 
+                print(f"[COLMAP] Processed frame {frame_idx+1}/{len(sample_frames)}: {frame['file_path']}")
+
             # Write unique points (remove duplicates by rounding)
             seen = set()
             for pt, r, g, b in all_points:
-                key = (round(pt[0], 3), round(pt[1], 3), round(pt[2], 3))
+                key = (round(pt[0], 2), round(pt[1], 2), round(pt[2], 2))  # Coarser rounding for more points
                 if key not in seen:
                     seen.add(key)
                     f.write(f"{pt_idx} {pt[0]} {pt[1]} {pt[2]} {r} {g} {b} 0\n")
