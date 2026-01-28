@@ -221,11 +221,19 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
     with open(sync_meta, "w") as f:
         json.dump(extracted_frames, f, indent=4)
         
-    # Generate 4DGS timestamps.json
-    timestamps = [{"file_path": f["file_path"], "timestamp": f["time"], "frame_idx": i} 
-                  for i, f in enumerate(extracted_frames)]
+    # Generate 4DGS timestamps.json (normalized to [0, 1])
+    # 4DGS expects timestamps in [0, 1] range for proper temporal modeling
+    n_frames = len(extracted_frames)
+    timestamps_dict = {}
+    for i, frame in enumerate(extracted_frames):
+        # Normalize time to [0, 1] based on frame index
+        normalized_time = i / (n_frames - 1) if n_frames > 1 else 0.0
+        timestamps_dict[frame["file_path"]] = normalized_time
+
     with open(os.path.join(output_dir, "timestamps.json"), "w") as f:
-        json.dump(timestamps, f, indent=4)
+        json.dump(timestamps_dict, f, indent=4)
+
+    print(f"[Timestamps] Normalized {n_frames} frames to [0, 1] range")
         
     # 4. Determine map transform (load from file, use provided, or default)
     if map_transform is None:
