@@ -100,7 +100,8 @@ def load_deformation_model(model_path, iteration):
     """Load the deformation network from checkpoint."""
     from scene.deformation import deform_network
 
-    deform_path = os.path.join(model_path, "deformation", f"iteration_{iteration}", "deformation.pth")
+    # Deformation model is saved inside point_cloud folder (not separate deformation folder)
+    deform_path = os.path.join(model_path, "point_cloud", f"iteration_{iteration}", "deformation.pth")
     if not os.path.exists(deform_path):
         print(f"[Warning] No deformation model found at {deform_path}")
         return None
