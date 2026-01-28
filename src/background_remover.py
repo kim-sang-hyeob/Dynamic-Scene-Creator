@@ -113,8 +113,12 @@ class BiRefNetRemover:
         mask = cv2.resize(mask, original_size, interpolation=cv2.INTER_LINEAR)
 
         # Apply mask to create RGBA image
+        # Set RGB to WHITE where mask is low (transparent) - like lego dataset
         rgb = np.array(image)
-        rgba = np.dstack([rgb, mask])
+        mask_binary = (mask > 127).astype(np.float32)[:, :, np.newaxis]
+        white_bg = np.ones_like(rgb) * 255
+        rgb_composited = (rgb * mask_binary + white_bg * (1 - mask_binary)).astype(np.uint8)
+        rgba = np.dstack([rgb_composited, mask])
 
         return rgba
 
