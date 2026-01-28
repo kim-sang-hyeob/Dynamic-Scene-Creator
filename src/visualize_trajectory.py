@@ -193,7 +193,9 @@ def compute_trajectories(xyz, deform, num_points=500, num_time_steps=10, device=
                 else:
                     deformed_xyz = result
 
-                trajectories[:, t_idx, :] = deformed_xyz.detach().cpu().numpy()
+                # Use tolist() to avoid numpy compatibility issues
+                deformed_np = np.array(deformed_xyz.detach().cpu().tolist())
+                trajectories[:, t_idx, :] = deformed_np
 
                 # Debug: check if positions actually changed
                 if t_idx == 0:
@@ -453,15 +455,28 @@ def visualize_with_rerun(xyz, stats, model_name="4DGS", output_path=None, trajec
 
         # Animate points over time
         print(f"[Rerun] Logging animation frames...")
+
+        # Detect Rerun API version
+        set_time_func = None
+        if hasattr(rr, 'set_time_sequence'):
+            set_time_func = lambda idx, t: (rr.set_time_sequence("frame", idx), rr.set_time_seconds("time", t) if hasattr(rr, 'set_time_seconds') else None)
+        elif hasattr(rr, 'set_time'):
+            # Try different signatures
+            def try_set_time(idx, t):
+                try:
+                    rr.set_time("frame", sequence=idx)
+                except TypeError:
+                    try:
+                        rr.set_time(timeline="frame", sequence=idx)
+                    except:
+                        pass
+            set_time_func = try_set_time
+        else:
+            print("[Warning] Rerun time API not found - animation may not work")
+            set_time_func = lambda idx, t: None
+
         for t_idx, t in enumerate(times):
-            # Use newer Rerun API (0.16+)
-            try:
-                rr.set_time("frame", sequence=t_idx)
-                rr.set_time("time", seconds=t)
-            except TypeError:
-                # Fallback for older API
-                rr.set_time_sequence("frame", t_idx)
-                rr.set_time_seconds("time", t)
+            set_time_func(t_idx, t)
 
             positions = trajectories[:, t_idx, :]
 
