@@ -99,6 +99,7 @@ def load_ply_points(model_path):
 def load_deformation_model(model_path, iteration):
     """Load the deformation network from checkpoint."""
     from scene.deformation import deform_network
+    import pickle
 
     # Deformation model is saved inside point_cloud folder (not separate deformation folder)
     deform_path = os.path.join(model_path, "point_cloud", f"iteration_{iteration}", "deformation.pth")
@@ -108,8 +109,28 @@ def load_deformation_model(model_path, iteration):
 
     print(f"[Trajectory] Loading deformation model from {deform_path}")
 
-    # Create deformation network with default args
-    args = get_default_deform_args()
+    # Try to load training args from cfg_args
+    cfg_path = os.path.join(model_path, "cfg_args")
+    args = None
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, 'rb') as f:
+                cfg_args = pickle.load(f)
+            # Copy relevant deformation args
+            args = get_default_deform_args()
+            for attr in ['net_width', 'timebase_pe', 'defor_depth', 'posebase_pe',
+                         'scale_rotation_pe', 'opacity_pe', 'timenet_width', 'timenet_output',
+                         'bounds', 'no_dx', 'no_grid', 'no_ds', 'no_dr', 'no_do', 'no_dshs']:
+                if hasattr(cfg_args, attr):
+                    setattr(args, attr, getattr(cfg_args, attr))
+            print(f"[Trajectory] Loaded training args from cfg_args")
+        except Exception as e:
+            print(f"[Trajectory] Could not load cfg_args: {e}")
+
+    if args is None:
+        args = get_default_deform_args()
+        print(f"[Trajectory] Using default deformation args")
+
     deform = deform_network(args)
 
     # Load weights
@@ -117,6 +138,7 @@ def load_deformation_model(model_path, iteration):
     deform.load_state_dict(checkpoint)
     deform.eval()
 
+    print(f"[Trajectory] Deformation model loaded successfully")
     return deform
 
 
@@ -165,10 +187,24 @@ def compute_trajectories(xyz, deform, num_points=500, num_time_steps=10, device=
         with torch.no_grad():
             try:
                 # The deformation network returns (means3D, scales, rotations, opacity, shs)
-                deformed_xyz, _, _, _, _ = deform(xyz_tensor, scales, rotations, opacity, shs, time_tensor)
-                trajectories[:, t_idx, :] = deformed_xyz.cpu().numpy()
+                result = deform(xyz_tensor, scales, rotations, opacity, shs, time_tensor)
+                if isinstance(result, tuple) and len(result) >= 1:
+                    deformed_xyz = result[0]
+                else:
+                    deformed_xyz = result
+
+                trajectories[:, t_idx, :] = deformed_xyz.detach().cpu().numpy()
+
+                # Debug: check if positions actually changed
+                if t_idx == 0:
+                    print(f"[Debug] First position sample: {trajectories[0, 0, :]}")
+                elif t_idx == num_time_steps - 1:
+                    diff = np.abs(trajectories[0, -1, :] - trajectories[0, 0, :]).max()
+                    print(f"[Debug] Last position sample: {trajectories[0, -1, :]}, max diff: {diff:.6f}")
             except Exception as e:
                 print(f"[Warning] Deformation query failed at t={t:.2f}: {e}")
+                import traceback
+                traceback.print_exc()
                 trajectories[:, t_idx, :] = sampled_xyz
 
         if (t_idx + 1) % 5 == 0:
@@ -418,8 +454,14 @@ def visualize_with_rerun(xyz, stats, model_name="4DGS", output_path=None, trajec
         # Animate points over time
         print(f"[Rerun] Logging animation frames...")
         for t_idx, t in enumerate(times):
-            rr.set_time_sequence("frame", t_idx)
-            rr.set_time_seconds("time", t)
+            # Use newer Rerun API (0.16+)
+            try:
+                rr.set_time("frame", sequence=t_idx)
+                rr.set_time("time", seconds=t)
+            except TypeError:
+                # Fallback for older API
+                rr.set_time_sequence("frame", t_idx)
+                rr.set_time_seconds("time", t)
 
             positions = trajectories[:, t_idx, :]
 
