@@ -51,14 +51,16 @@ def load_gaussian_model(model_path):
 
     # Initialize Gaussian model
     # Load hyperparameters if available
+    sh_degree = 3  # Default
     hyper_path = os.path.join(model_path, "cfg_args")
     if os.path.exists(hyper_path):
         import pickle
-        with open(hyper_path, 'rb') as f:
-            cfg_args = pickle.load(f)
-        sh_degree = getattr(cfg_args, 'sh_degree', 3)
-    else:
-        sh_degree = 3
+        try:
+            with open(hyper_path, 'rb') as f:
+                cfg_args = pickle.load(f)
+            sh_degree = getattr(cfg_args, 'sh_degree', 3)
+        except Exception as e:
+            print(f"[Warning] Could not load cfg_args: {e}, using default sh_degree=3")
 
     gaussians = GaussianModel(sh_degree)
     gaussians.load_ply(ply_path)
