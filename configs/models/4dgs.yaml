@@ -32,10 +32,8 @@ setup:
   - cmd: "{python} src/patch_4dgs_camera_offset.py {install_dir}/scene/dataset_readers.py"
   # Patch dataset_readers.py for SfM-free operation (generates random initial points when points3D is empty)
   - cmd: "{python} src/patch_4dgs_sfm_free.py {install_dir}/scene/dataset_readers.py"
-  # Patch for alpha channel support (enables transparent PNG background masking)
-  - cmd: "{python} src/patch_4dgs_alpha_mask.py {install_dir}"
-  # Patch for loss masking (prevents Gaussians from forming in transparent regions)
-  - cmd: "{python} src/patch_4dgs_loss_mask.py {install_dir}"
+  # Patch for transparent PNG support (alpha extraction + white background + loss masking)
+  - cmd: "{python} src/patch_4dgs_alpha.py {install_dir}"
 
 train:
   command: "{python} {install_dir}/train.py -s {scene_path} -m {output_path} --eval {extra_args}"
