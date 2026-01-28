@@ -20,6 +20,40 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'external', '4dgs'))
 
 
+def get_default_deform_args():
+    """Create default args for deformation network."""
+    from argparse import Namespace
+    args = Namespace(
+        net_width=64,
+        timebase_pe=4,
+        defor_depth=1,
+        posebase_pe=10,
+        scale_rotation_pe=2,
+        opacity_pe=2,
+        timenet_width=64,
+        timenet_output=32,
+        bounds=1.6,
+        kplanes_config={
+            'grid_dimensions': 2,
+            'input_coordinate_dim': 4,
+            'output_coordinate_dim': 32,
+            'resolution': [64, 64, 64, 25]
+        },
+        multires=[1, 2, 4, 8],
+        no_dx=False,
+        no_grid=False,
+        no_ds=False,
+        no_dr=False,
+        no_do=True,
+        no_dshs=True,
+        empty_voxel=False,
+        grid_pe=0,
+        static_mlp=False,
+        apply_rotation=False,
+    )
+    return args
+
+
 def load_ply_points(model_path):
     """Load point cloud from PLY file directly (without full GaussianModel)."""
     from plyfile import PlyData
@@ -60,6 +94,86 @@ def load_ply_points(model_path):
         opacity = vertex['opacity']
 
     return xyz, opacity, latest_iter
+
+
+def load_deformation_model(model_path, iteration):
+    """Load the deformation network from checkpoint."""
+    from scene.deformation import deform_network
+
+    deform_path = os.path.join(model_path, "deformation", f"iteration_{iteration}", "deformation.pth")
+    if not os.path.exists(deform_path):
+        print(f"[Warning] No deformation model found at {deform_path}")
+        return None
+
+    print(f"[Trajectory] Loading deformation model from {deform_path}")
+
+    # Create deformation network with default args
+    args = get_default_deform_args()
+    deform = deform_network(args)
+
+    # Load weights
+    checkpoint = torch.load(deform_path, map_location='cpu')
+    deform.load_state_dict(checkpoint)
+    deform.eval()
+
+    return deform
+
+
+def compute_trajectories(xyz, deform, num_points=500, num_time_steps=10, device='cpu'):
+    """Compute Gaussian trajectories over time using deformation network."""
+    total_points = len(xyz)
+
+    # Sample points
+    if num_points < total_points:
+        indices = np.random.choice(total_points, size=num_points, replace=False)
+    else:
+        indices = np.arange(total_points)
+        num_points = total_points
+
+    sampled_xyz = xyz[indices]
+
+    # Time steps
+    times = np.linspace(0, 1, num_time_steps)
+
+    # Initialize trajectories
+    trajectories = np.zeros((num_points, num_time_steps, 3))
+
+    if deform is None:
+        # No deformation - static points
+        print("[Warning] No deformation model - showing static positions")
+        for t_idx in range(num_time_steps):
+            trajectories[:, t_idx, :] = sampled_xyz
+        return trajectories, times, indices
+
+    # Move deform to device
+    deform = deform.to(device)
+
+    # Query deformation at each time step
+    xyz_tensor = torch.tensor(sampled_xyz, device=device, dtype=torch.float32)
+
+    # Create dummy scales, rotations for the forward pass
+    scales = torch.zeros(num_points, 3, device=device)
+    rotations = torch.zeros(num_points, 4, device=device)
+    rotations[:, 0] = 1.0  # Identity quaternion
+    opacity = torch.ones(num_points, 1, device=device)
+    shs = torch.zeros(num_points, 16, 3, device=device)
+
+    for t_idx, t in enumerate(times):
+        time_tensor = torch.full((num_points, 1), t, device=device, dtype=torch.float32)
+
+        with torch.no_grad():
+            try:
+                # The deformation network returns (means3D, scales, rotations, opacity, shs)
+                deformed_xyz, _, _, _, _ = deform(xyz_tensor, scales, rotations, opacity, shs, time_tensor)
+                trajectories[:, t_idx, :] = deformed_xyz.cpu().numpy()
+            except Exception as e:
+                print(f"[Warning] Deformation query failed at t={t:.2f}: {e}")
+                trajectories[:, t_idx, :] = sampled_xyz
+
+        if (t_idx + 1) % 5 == 0:
+            print(f"[Trajectory] Computed t={t:.2f} ({t_idx+1}/{num_time_steps})")
+
+    return trajectories, times, indices
 
 
 def analyze_point_distribution(xyz, opacity=None):
@@ -258,15 +372,15 @@ def compute_movement_stats(trajectories, times):
     }
 
 
-def visualize_with_rerun(xyz, stats, model_name="4DGS", output_path=None):
-    """Visualize point cloud distribution with Rerun."""
+def visualize_with_rerun(xyz, stats, model_name="4DGS", output_path=None, trajectories=None, times=None):
+    """Visualize point cloud distribution and trajectories with Rerun."""
     try:
         import rerun as rr
     except ImportError:
         print("[Error] Rerun not installed. Install with: pip install rerun-sdk")
         return
 
-    rr.init(f"4DGS Point Cloud Analysis - {model_name}")
+    rr.init(f"4DGS Trajectory Visualization - {model_name}")
 
     # If output_path specified, save to file. Otherwise try to spawn viewer
     if output_path:
@@ -276,27 +390,63 @@ def visualize_with_rerun(xyz, stats, model_name="4DGS", output_path=None):
         try:
             rr.spawn()
         except Exception as e:
-            # No display available, save to default file
-            output_path = f"{model_name}_analysis.rrd"
+            output_path = f"{model_name}_trajectories.rrd"
             rr.save(output_path)
             print(f"[Rerun] No display available, saving to {output_path}")
 
-    # Color points by position along the most elongated axis
-    axis_idx = ['X', 'Y', 'Z'].index(stats['elongated_axis'])
-    axis_vals = xyz[:, axis_idx]
-    normalized = (axis_vals - axis_vals.min()) / (axis_vals.max() - axis_vals.min() + 1e-6)
+    # If we have trajectories, visualize them
+    if trajectories is not None and times is not None:
+        num_points, num_times, _ = trajectories.shape
 
-    # Create colors: Blue (low) -> Red (high)
-    colors = np.zeros((len(xyz), 4), dtype=np.uint8)
-    colors[:, 0] = (normalized * 255).astype(np.uint8)  # Red
-    colors[:, 2] = ((1 - normalized) * 255).astype(np.uint8)  # Blue
-    colors[:, 3] = 255  # Alpha
+        # Log trajectory lines (static, showing full path)
+        print(f"[Rerun] Logging {num_points} trajectory lines...")
+        for p_idx in range(num_points):
+            positions = trajectories[p_idx]  # (num_times, 3)
 
-    # Log point cloud
-    rr.log(
-        "gaussians/all_points",
-        rr.Points3D(xyz, colors=colors, radii=0.02)
-    )
+            # Color based on total movement magnitude
+            movement = np.linalg.norm(positions[-1] - positions[0])
+            # Green (low movement) to Red (high movement)
+            red = min(255, int(movement * 500))
+            green = max(0, 255 - red)
+
+            rr.log(
+                f"trajectories/line_{p_idx}",
+                rr.LineStrips3D([positions], colors=[[red, green, 0, 200]])
+            )
+
+        # Animate points over time
+        print(f"[Rerun] Logging animation frames...")
+        for t_idx, t in enumerate(times):
+            rr.set_time_sequence("frame", t_idx)
+            rr.set_time_seconds("time", t)
+
+            positions = trajectories[:, t_idx, :]
+
+            # Color by time: Blue (t=0) to Red (t=1)
+            color = [int(255 * t), 50, int(255 * (1 - t)), 255]
+
+            rr.log(
+                "gaussians/animated",
+                rr.Points3D(positions, colors=[color] * len(positions), radii=0.03)
+            )
+
+        print(f"[Rerun] Animation: {num_times} frames logged")
+
+    else:
+        # Static visualization (no trajectories)
+        axis_idx = ['X', 'Y', 'Z'].index(stats['elongated_axis'])
+        axis_vals = xyz[:, axis_idx]
+        normalized = (axis_vals - axis_vals.min()) / (axis_vals.max() - axis_vals.min() + 1e-6)
+
+        colors = np.zeros((len(xyz), 4), dtype=np.uint8)
+        colors[:, 0] = (normalized * 255).astype(np.uint8)
+        colors[:, 2] = ((1 - normalized) * 255).astype(np.uint8)
+        colors[:, 3] = 255
+
+        rr.log(
+            "gaussians/all_points",
+            rr.Points3D(xyz, colors=colors, radii=0.02)
+        )
 
     # Log bounding box
     bbox_min = xyz.min(axis=0)
@@ -305,46 +455,29 @@ def visualize_with_rerun(xyz, stats, model_name="4DGS", output_path=None):
     half_sizes = (bbox_max - bbox_min) / 2
 
     rr.log(
-        "gaussians/bounding_box",
-        rr.Boxes3D(
-            centers=[center],
-            half_sizes=[half_sizes],
-            colors=[[255, 255, 0, 100]]
-        )
-    )
-
-    # Log center point
-    rr.log(
-        "gaussians/center",
-        rr.Points3D([stats['center']], colors=[[0, 255, 0, 255]], radii=0.1)
+        "scene/bounding_box",
+        rr.Boxes3D(centers=[center], half_sizes=[half_sizes], colors=[[255, 255, 0, 50]])
     )
 
     # Log axes
     axis_length = max(half_sizes) * 1.5
-    rr.log(
-        "axes/x",
-        rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[axis_length, 0, 0]], colors=[[255, 0, 0, 255]])
-    )
-    rr.log(
-        "axes/y",
-        rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[0, axis_length, 0]], colors=[[0, 255, 0, 255]])
-    )
-    rr.log(
-        "axes/z",
-        rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[0, 0, axis_length]], colors=[[0, 0, 255, 255]])
-    )
+    rr.log("axes/x", rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[axis_length, 0, 0]], colors=[[255, 0, 0, 255]]))
+    rr.log("axes/y", rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[0, axis_length, 0]], colors=[[0, 255, 0, 255]]))
+    rr.log("axes/z", rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[0, 0, axis_length]], colors=[[0, 0, 255, 255]]))
 
     print(f"\n[Rerun] Visualization complete")
-    print(f"  - Points colored by {stats['elongated_axis']} position (Blue=low, Red=high)")
-    print(f"  - Yellow box = bounding box")
-    print(f"  - Green point = center")
+    if trajectories is not None:
+        print(f"  - Trajectory lines: Green (static) to Red (moving)")
+        print(f"  - Animation: Blue (t=0) to Red (t=1)")
+    else:
+        print(f"  - Points colored by {stats['elongated_axis']} position")
     if output_path:
         print(f"\n  To view: rerun {output_path}")
-        print(f"  Or download and open locally with: rerun <file>.rrd")
+        print(f"  Or download and open locally")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Analyze 4DGS Gaussian point cloud distribution")
+    parser = argparse.ArgumentParser(description="Analyze 4DGS Gaussian point cloud and visualize trajectories")
     parser.add_argument("model_path", help="Path to trained model (e.g., output/4dgs/black_cat)")
     parser.add_argument("--output", type=str, default=None,
                         help="Output PLY file for visualization")
@@ -352,6 +485,12 @@ def main():
                         help="Only compute statistics, no file output")
     parser.add_argument("--rerun", action="store_true",
                         help="Visualize with Rerun")
+    parser.add_argument("--trajectories", action="store_true",
+                        help="Compute and visualize trajectories (requires deformation model)")
+    parser.add_argument("--num-points", type=int, default=300,
+                        help="Number of points to track for trajectories (default: 300)")
+    parser.add_argument("--num-steps", type=int, default=20,
+                        help="Number of time steps for trajectories (default: 20)")
 
     args = parser.parse_args()
 
@@ -370,11 +509,40 @@ def main():
     if args.stats_only:
         return
 
+    # Compute trajectories if requested
+    trajectories = None
+    times = None
+    if args.trajectories or args.rerun:
+        print(f"\n[Trajectory] Loading deformation model...")
+        try:
+            deform = load_deformation_model(args.model_path, iteration)
+            if deform is not None:
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                print(f"[Trajectory] Computing trajectories on {device}...")
+                trajectories, times, traj_indices = compute_trajectories(
+                    xyz, deform,
+                    num_points=args.num_points,
+                    num_time_steps=args.num_steps,
+                    device=device
+                )
+
+                # Compute movement stats
+                total_displacement = np.linalg.norm(trajectories[:, -1] - trajectories[:, 0], axis=1)
+                print(f"\n[Trajectory] Movement Statistics:")
+                print(f"  Mean displacement: {total_displacement.mean():.4f}")
+                print(f"  Max displacement:  {total_displacement.max():.4f}")
+                print(f"  Min displacement:  {total_displacement.min():.4f}")
+                print(f"  Points with movement > 0.1: {(total_displacement > 0.1).sum()}/{len(total_displacement)}")
+        except Exception as e:
+            print(f"[Warning] Could not load deformation model: {e}")
+            import traceback
+            traceback.print_exc()
+
     # Visualize with Rerun if requested
     if args.rerun:
         model_name = os.path.basename(args.model_path)
-        rrd_output = os.path.join(args.model_path, f"{model_name}_analysis.rrd")
-        visualize_with_rerun(xyz, stats, model_name, rrd_output)
+        rrd_output = os.path.join(args.model_path, f"{model_name}_trajectories.rrd")
+        visualize_with_rerun(xyz, stats, model_name, rrd_output, trajectories, times)
         return
 
     # Save colored PLY for visualization
