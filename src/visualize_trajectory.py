@@ -258,6 +258,75 @@ def compute_movement_stats(trajectories, times):
     }
 
 
+def visualize_with_rerun(xyz, stats, model_name="4DGS"):
+    """Visualize point cloud distribution with Rerun."""
+    try:
+        import rerun as rr
+    except ImportError:
+        print("[Error] Rerun not installed. Install with: pip install rerun-sdk")
+        return
+
+    rr.init(f"4DGS Point Cloud Analysis - {model_name}", spawn=True)
+
+    # Color points by position along the most elongated axis
+    axis_idx = ['X', 'Y', 'Z'].index(stats['elongated_axis'])
+    axis_vals = xyz[:, axis_idx]
+    normalized = (axis_vals - axis_vals.min()) / (axis_vals.max() - axis_vals.min() + 1e-6)
+
+    # Create colors: Blue (low) -> Red (high)
+    colors = np.zeros((len(xyz), 4), dtype=np.uint8)
+    colors[:, 0] = (normalized * 255).astype(np.uint8)  # Red
+    colors[:, 2] = ((1 - normalized) * 255).astype(np.uint8)  # Blue
+    colors[:, 3] = 255  # Alpha
+
+    # Log point cloud
+    rr.log(
+        "gaussians/all_points",
+        rr.Points3D(xyz, colors=colors, radii=0.02)
+    )
+
+    # Log bounding box
+    bbox_min = xyz.min(axis=0)
+    bbox_max = xyz.max(axis=0)
+    center = (bbox_min + bbox_max) / 2
+    half_sizes = (bbox_max - bbox_min) / 2
+
+    rr.log(
+        "gaussians/bounding_box",
+        rr.Boxes3D(
+            centers=[center],
+            half_sizes=[half_sizes],
+            colors=[[255, 255, 0, 100]]
+        )
+    )
+
+    # Log center point
+    rr.log(
+        "gaussians/center",
+        rr.Points3D([stats['center']], colors=[[0, 255, 0, 255]], radii=0.1)
+    )
+
+    # Log axes
+    axis_length = max(half_sizes) * 1.5
+    rr.log(
+        "axes/x",
+        rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[axis_length, 0, 0]], colors=[[255, 0, 0, 255]])
+    )
+    rr.log(
+        "axes/y",
+        rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[0, axis_length, 0]], colors=[[0, 255, 0, 255]])
+    )
+    rr.log(
+        "axes/z",
+        rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[0, 0, axis_length]], colors=[[0, 0, 255, 255]])
+    )
+
+    print(f"\n[Rerun] Visualization started")
+    print(f"  - Points colored by {stats['elongated_axis']} position (Blue=low, Red=high)")
+    print(f"  - Yellow box = bounding box")
+    print(f"  - Green point = center")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze 4DGS Gaussian point cloud distribution")
     parser.add_argument("model_path", help="Path to trained model (e.g., output/4dgs/black_cat)")
@@ -265,6 +334,8 @@ def main():
                         help="Output PLY file for visualization")
     parser.add_argument("--stats-only", action="store_true",
                         help="Only compute statistics, no file output")
+    parser.add_argument("--rerun", action="store_true",
+                        help="Visualize with Rerun")
 
     args = parser.parse_args()
 
@@ -281,6 +352,12 @@ def main():
     stats = analyze_point_distribution(xyz, opacity)
 
     if args.stats_only:
+        return
+
+    # Visualize with Rerun if requested
+    if args.rerun:
+        model_name = os.path.basename(args.model_path)
+        visualize_with_rerun(xyz, stats, model_name)
         return
 
     # Save colored PLY for visualization
