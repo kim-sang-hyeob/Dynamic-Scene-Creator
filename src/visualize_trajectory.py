@@ -258,7 +258,7 @@ def compute_movement_stats(trajectories, times):
     }
 
 
-def visualize_with_rerun(xyz, stats, model_name="4DGS"):
+def visualize_with_rerun(xyz, stats, model_name="4DGS", output_path=None):
     """Visualize point cloud distribution with Rerun."""
     try:
         import rerun as rr
@@ -266,7 +266,20 @@ def visualize_with_rerun(xyz, stats, model_name="4DGS"):
         print("[Error] Rerun not installed. Install with: pip install rerun-sdk")
         return
 
-    rr.init(f"4DGS Point Cloud Analysis - {model_name}", spawn=True)
+    rr.init(f"4DGS Point Cloud Analysis - {model_name}")
+
+    # If output_path specified, save to file. Otherwise try to spawn viewer
+    if output_path:
+        rr.save(output_path)
+        print(f"[Rerun] Saving to {output_path}")
+    else:
+        try:
+            rr.spawn()
+        except Exception as e:
+            # No display available, save to default file
+            output_path = f"{model_name}_analysis.rrd"
+            rr.save(output_path)
+            print(f"[Rerun] No display available, saving to {output_path}")
 
     # Color points by position along the most elongated axis
     axis_idx = ['X', 'Y', 'Z'].index(stats['elongated_axis'])
@@ -321,10 +334,13 @@ def visualize_with_rerun(xyz, stats, model_name="4DGS"):
         rr.Arrows3D(origins=[[0, 0, 0]], vectors=[[0, 0, axis_length]], colors=[[0, 0, 255, 255]])
     )
 
-    print(f"\n[Rerun] Visualization started")
+    print(f"\n[Rerun] Visualization complete")
     print(f"  - Points colored by {stats['elongated_axis']} position (Blue=low, Red=high)")
     print(f"  - Yellow box = bounding box")
     print(f"  - Green point = center")
+    if output_path:
+        print(f"\n  To view: rerun {output_path}")
+        print(f"  Or download and open locally with: rerun <file>.rrd")
 
 
 def main():
@@ -357,7 +373,8 @@ def main():
     # Visualize with Rerun if requested
     if args.rerun:
         model_name = os.path.basename(args.model_path)
-        visualize_with_rerun(xyz, stats, model_name)
+        rrd_output = os.path.join(args.model_path, f"{model_name}_analysis.rrd")
+        visualize_with_rerun(xyz, stats, model_name, rrd_output)
         return
 
     # Save colored PLY for visualization
