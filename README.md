@@ -1,10 +1,56 @@
 # 4DGS Pipeline - Colmap-free Unity→4DGS
 
-**Colmap-free 경량화 및 동적 객체 합성을 위한 4DGS 파이프라인**
+**고품질 정적 3DGS 맵 위에 동적 객체를 분리 학습하는 Colmap-free 4DGS 파이프라인**
 
 > 부스트캠프 AI Tech 8기 CV-09 최종 프로젝트
 
 Unity 카메라 트래킹 데이터를 활용하여 SfM(Structure from Motion) 과정 없이 4D Gaussian Splatting 모델을 학습하는 파이프라인입니다.
+
+---
+
+## 차별화 포인트
+
+### 1. Large Translational Motion
+
+기존 4DGS 연구는 **제자리에서 움직이는 객체**(손 흔들기, 표정 변화 등)에 최적화되어 있습니다.
+우리는 **공간을 가로질러 이동하는 객체**(뛰어가는 고양이, 걸어가는 사람 등)를 타겟으로 합니다.
+
+| | 기존 4DGS | 우리 파이프라인 |
+|---|-----------|---------------|
+| 대상 모션 | 제자리 움직임 (quasi-static) | 큰 이동 (large translational) |
+| Deformation | 작은 변위 보정 | 큰 공간 이동 + 형태 변형 |
+| 초기 포인트 | SfM 포인트 사용 | MiDaS 깊이 기반 전경 초기화 |
+
+> SPIN-4DGS, PMGS 등 최신 연구에서도 large translational motion은 **열린 문제**로 언급됨
+
+### 2. Static-Dynamic Composition
+
+기존 접근법은 전체 씬을 하나의 4DGS로 학습합니다.
+우리는 **정적 배경과 동적 객체를 분리**하는 전략을 사용합니다.
+
+```
+기존: 전체 씬 → 하나의 4DGS → 배경+객체 혼합
+우리: 정적 배경 → 고품질 3DGS 맵 (재사용 가능)
+      동적 객체 → 배경 제거 후 4DGS 학습 (교체/편집 가능)
+```
+
+**장점:**
+- 동적 객체만 교체/편집 가능 (씬 전체 재학습 불필요)
+- 기존 고품질 3DGS 맵 재활용
+- 배경 Gaussian 제거로 학습 효율 향상 (PSNR 33+ 달성)
+
+### 3. Colmap-free Pipeline
+
+합성 환경(Unity)에서 카메라 GT를 직접 획득하여 COLMAP SfM 과정을 완전히 우회합니다.
+
+| | COLMAP 기반 | 우리 파이프라인 |
+|---|------------|---------------|
+| 카메라 포즈 | SfM으로 추정 (실패 가능) | Unity GT 직접 사용 |
+| 초기 포인트 | SfM 포인트 | Alpha mask + MiDaS 깊이 back-projection |
+| 전처리 시간 | 수십 분~수 시간 | 수 분 이내 |
+| 동적 씬 | SfM 실패 위험 | 문제 없음 |
+
+---
 
 ## 연구 배경
 
@@ -27,8 +73,11 @@ Unity 엔진의 **정확한 카메라 트래킹 데이터**를 직접 활용하�
 Unity Scene → Camera Tracking JSON → Diffusion Video Generation
                     ↓
             process-unity (SfM bypass)
+              ├─ BiRefNet 배경 제거
+              ├─ MiDaS 깊이 추정 → 전경 포인트 초기화
+              └─ Unity→COLMAP/NeRF 좌표 변환
                     ↓
-              4DGS Training
+              4DGS Training (배경 제거 + Loss Masking)
                     ↓
          Novel View Rendering (any angle)
 ```
@@ -36,9 +85,11 @@ Unity Scene → Camera Tracking JSON → Diffusion Video Generation
 ## Features
 
 - **SfM-free**: Unity의 정확한 카메라 데이터를 직접 활용 (COLMAP 불필요)
+- **배경 제거 학습**: BiRefNet 배경 제거 + Alpha-aware Loss Masking
+- **MiDaS 깊이 초기화**: 단안 깊이 추정으로 전경 포인트 클라우드 생성
 - **Camera Rotation Rendering**: 학습된 모델을 다양한 각도에서 렌더링
 - **Configurable Coordinate Transform**: Unity↔NeRF 좌표 변환 파라미터 설정 가능
-- **V100 GPU Optimized**: CUDA 11.8 + PyTorch 호환성 검증
+- **Trajectory Visualization**: Rerun 기반 Gaussian 궤적 시각화
 
 ## Requirements
 
@@ -216,33 +267,63 @@ python manage.py visualize output/4dgs/black_cat/point_cloud
 python manage.py visualize output/4dgs/black_cat/point_cloud --web
 ```
 
+## 기술적 기여 및 실험 결과
+
+### 핵심 문제 해결 흐름
+
+```
+문제: 투명 PNG로 학습해도 배경 형체가 나타남
+         ↓
+원인 1: 4DGS가 Alpha 무시 → Alpha Patch 적용
+         ↓
+원인 2: 배경에도 Loss 발생 → Loss Masking Patch
+         ↓
+원인 3: 초기점이 전경에 없음 → MiDaS 깊이 기반 전경 초기화
+         ↓
+부수 문제: CUDA crash → Tensor View→Clone 수정
+         ↓
+최종 결과: 배경 없는 깨끗한 4D Gaussian 학습 성공
+```
+
+### 정량적 결과
+
+| 지표 | 기존 (배경 포함) | Loss Masking만 | 최종 (모든 패치) |
+|------|-----------------|----------------|-----------------|
+| 초기 Points | 1080 | 1080 | 1000 |
+| 최종 Points | 168000+ | 1080 (변화없음) | 19000+ |
+| PSNR | ~25 | 18.4 (학습 실패) | **33+** |
+| 배경 Gaussian | 있음 | 측정 불가 | **없음** |
+
+> 자세한 실험 기록은 [docs/experiments/](docs/experiments/) 참고
+
 ## Project Structure
 
 ```
 4dgs_project/
-├── manage.py              # 메인 CLI
+├── manage.py                  # 메인 CLI
 ├── configs/
-│   ├── default.yaml       # 전역 설정
+│   ├── default.yaml           # 전역 설정
 │   └── models/
-│       └── 4dgs.yaml      # 4DGS 모델 설정
+│       └── 4dgs.yaml          # 4DGS 모델 설정
 ├── src/
-│   ├── setup.py           # 환경 설정 매니저
-│   ├── runner.py          # 학습/렌더링 실행기
-│   ├── dataset.py         # 데이터셋 매니저
-│   ├── model_registry.py  # 모델 레지스트리
-│   ├── json_sync_utils.py # Unity JSON 동기화 (핵심)
-│   ├── camera_transform.py # 카메라 좌표 변환
-│   ├── patch_4dgs_camera_offset.py # 4DGS 카메라 패치
-│   ├── filter_utils.py    # PLY 필터링
-│   ├── rerun_vis.py       # Rerun 시각화
-│   └── exporter.py        # PLY→Splat 변환
+│   ├── json_sync_utils.py     # Unity→COLMAP/NeRF 변환 (핵심)
+│   ├── background_remover.py  # BiRefNet 배경 제거
+│   ├── depth_estimator.py     # MiDaS 깊이 추정
+│   ├── patch_4dgs_alpha.py    # Alpha + Loss Masking 패치
+│   ├── patch_4dgs_sfm_free.py # SfM-free 동작 패치
+│   ├── patch_4dgs_open3d.py   # open3d 의존성 제거 패치
+│   ├── patch_4dgs_camera_offset.py # 카메라 회전 패치
+│   ├── visualize_trajectory.py # Gaussian 궤적 시각화
+│   ├── runner.py              # 학습/렌더링 실행기
+│   ├── setup.py               # 환경 설정 매니저
+│   ├── dataset.py             # 데이터셋 매니저
+│   └── model_registry.py     # 모델 레지스트리
+├── docs/experiments/          # 실험 기록
 ├── scripts/
-│   └── setup_server.sh    # 서버 자동 설치
-├── data/                  # 입력 데이터 (gitignore)
-├── external/              # 외부 모델 (gitignore)
-│   └── 4dgs/              # 4DGS 레포지토리
-├── output/                # 학습 출력 (gitignore)
-└── archive/               # 미사용 파일 보관
+│   └── setup_server.sh        # 서버 자동 설치
+├── data/                      # 입력 데이터 (gitignore)
+├── external/4dgs/             # 4DGS 레포지토리 (gitignore)
+└── output/                    # 학습 출력 (gitignore)
 ```
 
 ## Coordinate System
@@ -456,5 +537,8 @@ This project is for educational and research purposes (Boostcamp AI Tech Final P
 
 ## References
 
-- [4D Gaussian Splatting](https://github.com/hustvl/4DGaussians)
-- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
+- [4D Gaussian Splatting](https://github.com/hustvl/4DGaussians) - 동적 씬 재구성
+- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) - 정적 씬 재구성
+- [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) - 배경 제거
+- [MiDaS](https://github.com/isl-org/MiDaS) - 단안 깊이 추정
+- [Rerun](https://github.com/rerun-io/rerun) - 3D 시각화
