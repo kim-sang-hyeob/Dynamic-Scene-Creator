@@ -29,6 +29,34 @@ def pack_half2x16(x, y):
     return np.uint32(x_bits) | (np.uint32(y_bits) << 16)
 
 
+def rotation_matrix(rx, ry, rz):
+    """
+    Create a 3x3 rotation matrix from Euler angles (in degrees).
+    Uses ZYX rotation order.
+    """
+    rx, ry, rz = np.radians([rx, ry, rz])
+    
+    # Rotation matrices
+    Rx = np.array([
+        [1, 0, 0],
+        [0, np.cos(rx), -np.sin(rx)],
+        [0, np.sin(rx), np.cos(rx)]
+    ])
+    Ry = np.array([
+        [np.cos(ry), 0, np.sin(ry)],
+        [0, 1, 0],
+        [-np.sin(ry), 0, np.cos(ry)]
+    ])
+    Rz = np.array([
+        [np.cos(rz), -np.sin(rz), 0],
+        [np.sin(rz), np.cos(rz), 0],
+        [0, 0, 1]
+    ])
+    
+    # Combined rotation: R = Rz @ Ry @ Rx
+    return Rz @ Ry @ Rx
+
+
 def read_splat_file(filepath):
     """
     Read .splat file (antimatter15 format: 32 bytes per gaussian).
@@ -103,7 +131,7 @@ def read_splatv_file(filepath):
     }
 
 
-def splat_to_texdata(gaussians, offset=(0, 0, 0), scale=1.0):
+def splat_to_texdata(gaussians, offset=(0, 0, 0), scale=1.0, rotation=(0, 0, 0)):
     """
     Convert .splat data to splatv texture format.
     
@@ -111,6 +139,7 @@ def splat_to_texdata(gaussians, offset=(0, 0, 0), scale=1.0):
         gaussians: dict from read_splat_file
         offset: (x, y, z) position offset
         scale: scale factor for positions
+        rotation: (rx, ry, rz) rotation in degrees
     
     Returns: (texdata, texwidth, texheight)
     """
@@ -122,7 +151,11 @@ def splat_to_texdata(gaussians, offset=(0, 0, 0), scale=1.0):
     texdata_f = texdata.view(np.float32)
     texdata_c = texdata.view(np.uint8)
     
-    positions = gaussians['positions'] * scale + np.array(offset)
+    # Apply rotation, scale, then offset
+    R = rotation_matrix(*rotation)
+    positions = gaussians['positions'] @ R.T  # Apply rotation
+    positions = positions * scale + np.array(offset)
+    
     scales = gaussians['scales'] * scale
     colors = gaussians['colors']
     rots_u8 = gaussians['rotations_u8']
@@ -272,6 +305,9 @@ Examples:
                         help="Position offset for background (default: 0 0 0)")
     parser.add_argument("--bg-scale", type=float, default=1.0,
                         help="Scale factor for background (default: 1.0)")
+    parser.add_argument("--bg-rotate", nargs=3, type=float, default=[0, 0, 0],
+                        metavar=('X', 'Y', 'Z'),
+                        help="Rotation for background in degrees (default: 0 0 0)")
     
     args = parser.parse_args()
     
@@ -286,7 +322,8 @@ Examples:
         bg_texdata, _, _ = splat_to_texdata(
             bg_data, 
             offset=tuple(args.bg_offset),
-            scale=args.bg_scale
+            scale=args.bg_scale,
+            rotation=tuple(args.bg_rotate)
         )
         bg_count = bg_data['count']
     elif bg_file.suffix.lower() == '.splatv':
