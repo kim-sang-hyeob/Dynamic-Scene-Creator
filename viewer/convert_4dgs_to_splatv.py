@@ -6,6 +6,7 @@ splaTV format stores motion parameters per Gaussian:
 - rotation: float16[4] (quaternion)
 - scale: float16[3]
 - color: uint8[4] (RGBA from SH DC)
+
 - motion_0~8: 9 coefficients for position delta (dt, dt², dt³ terms)
 - omega_0~3: 4 coefficients for rotation delta
 - trbf_center: temporal center
