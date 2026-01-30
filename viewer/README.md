@@ -1,61 +1,116 @@
-# 4D Gaussians를 위한 export_to_splatv
+# Viewer - 4DGS 시각화 도구
 
-이 도구는 학습된 4D Gaussian Splatting 모델을 웹에서 가볍게 시각화할 수 있는 `.splatv` 형식으로 변환해줍니다.
+4D Gaussian Splatting 모델을 웹에서 시각화하기 위한 변환 스크립트와 웹 뷰어 모음입니다.
 
-## 필수 조건
+## 📁 구성
 
-이 도구는 [4DGaussians](https://github.com/hustvl/4DGaussians) 환경 내에서 동작하도록 설계되었습니다.
+| 파일 | 설명 |
+|------|------|
+| `convert_ply_to_splat.py` | PLY → .splat 변환 |
+| `convert_4dgs_to_splatv.py` | 4DGS → .splatv 변환 |
+| `merge_splat_files.py` | .splat + .splatv 병합 |
+| `web_viewer/` | 웹 기반 뷰어 |
 
-## 설치 방법
+---
 
-1. `export_to_splatv.py` 파일을 4DGaussians 저장소의 최상위(root) 디렉토리로 복사하세요.
-   ```bash
-   cp export_to_splatv.py /path/to/4DGaussians/
-   ```
+## 🔧 스크립트 사용법
 
-2. (선택 사항) `web_viewer` 폴더는 원하는 위치 아무 곳에나 두어도 상관없습니다.
+### 1. PLY → .splat 변환
 
-## 사용법
+3DGS로 학습된 PLY 파일을 웹 뷰어용 `.splat` 포맷으로 변환합니다.
 
-`4DGaussians` 저장소의 최상위 경로에서 스크립트를 실행하여 학습된 모델을 변환합니다.
-
-명령어 구조:
 ```bash
-python export_to_splatv.py -s <dataset_path> -m <model_output_path> --output <output_filename.splatv>
+python convert_ply_to_splat.py <input.ply> -o <output.splat>
+
+# 예시
+python convert_ply_to_splat.py point_cloud.ply -o map.splat
 ```
 
-**인자 (Arguments):**
-- `-s, --source_path`: 데이터셋 경로 (학습에 사용한 경로와 동일해야 함).
-- `-m, --model_path`: 학습된 모델의 출력 디렉토리 경로 (이 경로 아래에 `point_cloud/iteration_XXXX/` 폴더가 있어야 하며, 그 안에 `point_cloud.ply`와 `deformation.pth` 등이 포함되어 있어야 합니다).
-- `--output`: 저장할 `.splatv` 파일 경로.
-- `--iteration`: (선택) 특정 반복(iteration)을 불러올 때 사용. 기본값은 가장 최신 모델을 불러옵니다.
-- `--num_samples`: (선택) 모션을 피팅(fitting)할 시간 샘플 수. 기본값은 20입니다.
+**옵션:**
+- `--sh-mode {first,average}`: SH 계수 처리 방식 (기본: first)
 
-**예시:**
+---
+
+### 2. 4DGS → .splatv 변환
+
+4D Gaussian Splatting 모델을 애니메이션 지원 `.splatv` 포맷으로 변환합니다.
+
 ```bash
-python export_to_splatv.py -s data/lego -m output/lego_4d --output full_lego.splatv
+python convert_4dgs_to_splatv.py <point_cloud_dir> -o <output.splatv>
+
+# 예시 (4DGaussians 학습 결과)
+python convert_4dgs_to_splatv.py output/lego/point_cloud/iteration_30000 -o model.splatv
 ```
 
-## 웹 뷰어 (Web Viewer)
+**옵션:**
+- `--cameras <path>`: 카메라 정보 JSON 파일
+- `--num-samples <N>`: 모션 샘플 수 (기본: 20)
 
-`web_viewer` 디렉토리에 가벼운 웹 뷰어가 포함되어 있습니다.
+---
 
-1. **로컬 웹 서버 시작:**
-   브라우저 보안 제한으로 인해 로컬 파일을 직접 불러오지 못할 수 있습니다. 간단한 HTTP 서버를 실행하는 것을 권장합니다.
-   
-   ```bash
-   cd web_viewer
-   python3 -m http.server 8000
-   ```
+### 3. 배경 + 객체 병합
 
-2. **뷰어 열기:**
-   웹 브라우저를 열고 다음 주소로 접속하세요: [http://localhost:8000](http://localhost:8000)
+정적 배경(.splat)과 동적 객체(.splatv)를 하나의 파일로 병합합니다.
 
-3. **모델 불러오기:**
-   - 생성된 `.splatv` 파일을 브라우저 창으로 드래그 앤 드롭하세요.
-   - **조작법:**
-     - **왼쪽 클릭 + 드래그**: 궤도 회전 (Orbit/Rotate).
-     - **오른쪽 클릭 + 드래그**: 화면 이동 (Pan).
-     - **스크롤**: 줌 인/아웃 (Zoom).
-     - **재생/일시정지**: UI 버튼을 사용하여 애니메이션을 제어합니다.
-     - **속도**: 재생 속도를 조절합니다.
+```bash
+python merge_splat_files.py <background> <object> -o <output.splatv>
+
+# 기본 병합
+python merge_splat_files.py map.splat model.splatv -o merged.splatv
+
+# 객체 위치/크기 조정
+python merge_splat_files.py map.splat model.splatv -o merged.splatv \
+    --offset 1.5 0.0 -2.0 \
+    --scale 0.5
+```
+
+**옵션:**
+- `--offset X Y Z`: 객체 위치 오프셋
+- `--scale S`: 객체 스케일
+- `--bg-offset X Y Z`: 배경 위치 오프셋
+- `--bg-scale S`: 배경 스케일
+
+---
+
+## 🌐 웹 뷰어
+
+### 실행
+
+```bash
+cd web_viewer
+python -m http.server 8080
+```
+
+브라우저에서 http://localhost:8080 접속
+
+### 파일 로드
+
+`.ply`, `.splat`, `.splatv` 파일을 브라우저 창에 드래그 앤 드롭
+
+### 조작법
+
+| 조작 | 기능 |
+|------|------|
+| 왼쪽 드래그 | 카메라 회전 (Orbit) |
+| 오른쪽 드래그 / Shift+드래그 | 카메라 이동 (Pan) |
+| 마우스 휠 | 줌 인/아웃 |
+| M 키 | 현재 위치 좌표 복사 |
+| V 키 | 뷰 매트릭스 URL에 저장 |
+
+---
+
+## 📋 워크플로우 예시
+
+```bash
+# 1. 배경 PLY를 .splat으로 변환
+python convert_ply_to_splat.py background.ply -o map.splat
+
+# 2. 4DGS 모델을 .splatv로 변환
+python convert_4dgs_to_splatv.py ./4dgs_output/point_cloud/iteration_30000 -o model.splatv
+
+# 3. 배경과 객체 병합
+python merge_splat_files.py map.splat model.splatv -o merged.splatv --offset 0 1 0 --scale 0.5
+
+# 4. 웹 뷰어에서 확인
+cd web_viewer && python -m http.server 8080
+```

@@ -114,6 +114,82 @@ function createWorker(self) {
 
   let sortRunning;
 
+  // Process .splat file (antimatter15 format: 32 bytes per gaussian)
+  function processSplatBuffer(inputBuffer) {
+    const splatCount = inputBuffer.byteLength / 32; // 32 bytes per splat
+    console.log("Splat Count", splatCount);
+
+    const f_buffer = new Float32Array(inputBuffer);
+    const u8_buffer = new Uint8Array(inputBuffer);
+
+    const position_buffer = new Float32Array(3 * splatCount);
+    var texwidth = 1024 * 4;
+    var texheight = Math.ceil((4 * splatCount) / texwidth);
+    var texdata = new Uint32Array(texwidth * texheight * 4);
+    var texdata_c = new Uint8Array(texdata.buffer);
+    var texdata_f = new Float32Array(texdata.buffer);
+
+    // Splat format (32 bytes per gaussian):
+    // position: float32[3] (12 bytes)
+    // scale: float32[3] (12 bytes)
+    // color: uint8[4] (4 bytes - RGBA)
+    // rotation: uint8[4] (4 bytes - normalized quaternion)
+
+    for (let j = 0; j < splatCount; j++) {
+      const base_f = j * 8; // 8 floats = 32 bytes
+      const base_u8 = j * 32;
+
+      // Position (float32[3])
+      const x = f_buffer[base_f + 0];
+      const y = f_buffer[base_f + 1];
+      const z = f_buffer[base_f + 2];
+      position_buffer[3 * j + 0] = x;
+      position_buffer[3 * j + 1] = y;
+      position_buffer[3 * j + 2] = z;
+
+      texdata_f[16 * j + 0] = x;
+      texdata_f[16 * j + 1] = y;
+      texdata_f[16 * j + 2] = z;
+
+      // Scale (float32[3])
+      const scale_0 = f_buffer[base_f + 3];
+      const scale_1 = f_buffer[base_f + 4];
+      const scale_2 = f_buffer[base_f + 5];
+
+      // Rotation from uint8[4] (normalized, 0-255 -> -1 to 1)
+      const rot_0 = (u8_buffer[base_u8 + 28] - 128) / 128;
+      const rot_1 = (u8_buffer[base_u8 + 29] - 128) / 128;
+      const rot_2 = (u8_buffer[base_u8 + 30] - 128) / 128;
+      const rot_3 = (u8_buffer[base_u8 + 31] - 128) / 128;
+
+      texdata[16 * j + 3] = packHalf2x16(rot_0, rot_1);
+      texdata[16 * j + 4] = packHalf2x16(rot_2, rot_3);
+
+      texdata[16 * j + 5] = packHalf2x16(scale_0, scale_1);
+      texdata[16 * j + 6] = packHalf2x16(scale_2, 0);
+
+      // RGBA from uint8[4] at byte 24
+      texdata_c[4 * (16 * j + 7) + 0] = u8_buffer[base_u8 + 24];
+      texdata_c[4 * (16 * j + 7) + 1] = u8_buffer[base_u8 + 25];
+      texdata_c[4 * (16 * j + 7) + 2] = u8_buffer[base_u8 + 26];
+      texdata_c[4 * (16 * j + 7) + 3] = u8_buffer[base_u8 + 27];
+
+      // No motion data for static splat - set to zero
+      texdata[16 * j + 8 + 0] = 0;
+      texdata[16 * j + 8 + 1] = 0;
+      texdata[16 * j + 8 + 2] = 0;
+      texdata[16 * j + 8 + 3] = 0;
+      texdata[16 * j + 8 + 4] = 0;
+      texdata[16 * j + 8 + 5] = 0;
+      texdata[16 * j + 8 + 6] = 0;
+      texdata[16 * j + 8 + 7] = packHalf2x16(0.5, 1.0); // trbf_center, trbf_scale
+    }
+
+    console.log("Splat Scene Bytes", texdata.buffer.byteLength);
+    self.postMessage({ texdata, texwidth, texheight }, [texdata.buffer]);
+    return splatCount;
+  }
+
   function processPlyBuffer(inputBuffer) {
     const ubuf = new Uint8Array(inputBuffer);
     // 10KB ought to be enough for a header...
@@ -264,6 +340,9 @@ function createWorker(self) {
     } else if (e.data.ply) {
       vertexCount = 0;
       vertexCount = processPlyBuffer(e.data.ply);
+    } else if (e.data.splat) {
+      vertexCount = 0;
+      vertexCount = processSplatBuffer(e.data.splat);
     }
   };
 }
@@ -547,6 +626,37 @@ async function main() {
     } else if (e.code === "KeyP") {
       carousel = true;
       //   camid.innerText = "";
+    } else if (e.code === "KeyM") {
+      // Mark position - get the point the camera is looking at
+      let inv = invert4(viewMatrix);
+      // Camera position (world space)
+      const camX = inv[12];
+      const camY = inv[13];
+      const camZ = inv[14];
+      // Camera forward direction
+      const fwdX = -inv[8];
+      const fwdY = -inv[9];
+      const fwdZ = -inv[10];
+      // Target point (4 units in front of camera)
+      const dist = 4;
+      const targetX = camX + fwdX * dist;
+      const targetY = camY + fwdY * dist;
+      const targetZ = camZ + fwdZ * dist;
+
+      const posStr = `--offset ${targetX.toFixed(3)} ${targetY.toFixed(3)} ${targetZ.toFixed(3)}`;
+      console.log("=== MARKED POSITION ===");
+      console.log(`Camera: (${camX.toFixed(3)}, ${camY.toFixed(3)}, ${camZ.toFixed(3)})`);
+      console.log(`Target: (${targetX.toFixed(3)}, ${targetY.toFixed(3)}, ${targetZ.toFixed(3)})`);
+      console.log(`Copy this for merge_splat_files.py: ${posStr}`);
+
+      // Copy to clipboard
+      navigator.clipboard.writeText(posStr).then(() => {
+        document.getElementById("message").innerText = `Position copied: ${posStr}`;
+        setTimeout(() => { document.getElementById("message").innerText = ""; }, 3000);
+      }).catch(() => {
+        document.getElementById("message").innerText = `Position: ${posStr}`;
+        setTimeout(() => { document.getElementById("message").innerText = ""; }, 5000);
+      });
     }
   });
   window.addEventListener("keyup", (e) => {
@@ -926,14 +1036,18 @@ async function main() {
           // ply file magic header means it should be handled differently
           worker.postMessage({ ply: splatData.buffer });
         } else if (splatData[0] == 75 && splatData[1] == 103) {
-          // splatv file
+          // splatv file (magic header 0x674b)
           readChunks(new Response(splatData).body.getReader(), [{ size: 8, type: "magic" }], chunkHandler).then(() => {
             currentCameraIndex = 0;
             camera = cameras[currentCameraIndex];
             viewMatrix = getViewMatrix(camera);
           });
+        } else if (/\.splat$/i.test(file.name) || splatData.byteLength % 32 === 0) {
+          // .splat file (antimatter15 format: 32 bytes per gaussian)
+          console.log("Loading .splat file:", file.name);
+          worker.postMessage({ splat: splatData.buffer });
         } else {
-          alert("Unsupported file format!");
+          alert("Unsupported file format! Supported: .ply, .splat, .splatv, .json");
         }
       };
       fr.readAsArrayBuffer(file);
@@ -957,7 +1071,19 @@ async function main() {
   document.addEventListener("drop", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    selectFile(e.dataTransfer.files[0]);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 1) {
+      selectFile(files[0]);
+    } else if (files.length > 1) {
+      // Multiple files dropped - load them as layers
+      console.log(`Loading ${files.length} files as layers...`);
+      files.forEach((file, index) => {
+        setTimeout(() => {
+          console.log(`Loading layer ${index + 1}: ${file.name}`);
+          selectFile(file);
+        }, index * 500); // Stagger loading to avoid race conditions
+      });
+    }
   });
 
   let lastVertexCount = -1;
