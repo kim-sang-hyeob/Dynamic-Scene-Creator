@@ -11,6 +11,65 @@ DEFAULT_MAP_TRANSFORM = {
     'scale': [3, 3, 3]
 }
 
+def get_json_value(frame, new_key, old_key, default=None):
+    """Get value from frame dict supporting both new (snake_case) and old (camelCase) key formats."""
+    if new_key in frame:
+        return frame[new_key]
+    if old_key in frame:
+        return frame[old_key]
+    return default
+
+def euler_to_quaternion(euler_dict):
+    """Convert Euler angles (in degrees) to quaternion {x, y, z, w}.
+    Uses Unity's rotation order: ZXY (yaw, pitch, roll).
+    """
+    # Convert degrees to radians
+    pitch = math.radians(euler_dict.get('x', 0))  # X-axis rotation
+    yaw = math.radians(euler_dict.get('y', 0))    # Y-axis rotation  
+    roll = math.radians(euler_dict.get('z', 0))   # Z-axis rotation
+    
+    # Unity uses ZXY order (yaw, pitch, roll)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    
+    # ZXY order quaternion multiplication
+    w = cy * cp * cr + sy * sp * sr
+    x = cy * sp * cr + sy * cp * sr
+    y = sy * cp * cr - cy * sp * sr
+    z = cy * cp * sr - sy * sp * cr
+    
+    return {'x': x, 'y': y, 'z': z, 'w': w}
+
+def get_cam_pos(frame):
+    """Get camera position from frame, supporting both formats."""
+    pos = get_json_value(frame, 'cam_pos', 'camPos')
+    if pos is None:
+        raise KeyError("Neither 'cam_pos' nor 'camPos' found in frame")
+    return pos
+
+def get_cam_rot(frame):
+    """Get camera rotation as quaternion from frame.
+    Supports both quaternion format (camRot with w) and Euler format (cam_rot without w).
+    """
+    rot = get_json_value(frame, 'cam_rot', 'camRot')
+    if rot is None:
+        raise KeyError("Neither 'cam_rot' nor 'camRot' found in frame")
+    
+    # Check if it's Euler angles (no 'w' key) or quaternion (has 'w' key)
+    if 'w' not in rot:
+        # Convert Euler to quaternion
+        return euler_to_quaternion(rot)
+    return rot
+
+def get_obj_pos(frame):
+    """Get object position from frame, supporting both formats."""
+    pos = get_json_value(frame, 'obj_pos', 'objPos', {'x': 0, 'y': 0, 'z': 0})
+    return pos
+
 def load_map_transform(project_dir):
     """Load map transform from file if exists, otherwise return None."""
     map_transform_path = os.path.join(project_dir, "map_transform.json")
@@ -208,9 +267,9 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
             "file_path": frame_name,
             "time": normalized_time, # Normalized [0,1] for 4DGS
             "original_time": t_orig,
-            "camPos": target_json['camPos'],
-            "camRot": target_json['camRot'],
-            "objPos": target_json.get('objPos', {'x':0, 'y':0, 'z':0})
+            "camPos": get_cam_pos(target_json),
+            "camRot": get_cam_rot(target_json),
+            "objPos": get_obj_pos(target_json)
         })
 
     cap_out.release()
