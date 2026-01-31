@@ -525,45 +525,85 @@
       `).join('');
         }
 
-        // Interpolate between waypoints
+        // ============================================
+        // Catmull-Rom Spline Interpolation
+        // ============================================
+        
+        // Catmull-Rom 스플라인 보간 함수
+        // t: 0~1 사이의 로컬 파라미터
+        // p0, p1, p2, p3: 4개의 제어점
+        function catmullRom(t, p0, p1, p2, p3) {
+            const t2 = t * t;
+            const t3 = t2 * t;
+            
+            // Catmull-Rom 행렬 계산
+            return 0.5 * (
+                (2 * p1) +
+                (-p0 + p2) * t +
+                (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+                (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+            );
+        }
+        
+        // ViewMatrix 스플라인 보간
         function interpolateViewMatrix(t) {
             if (waypoints.length < 2) return waypoints[0]?.viewMatrix || window.viewMatrix;
-
-            // Find which segment we're in
-            const segmentCount = waypoints.length - 1;
-            const segmentT = t * segmentCount;
-            const segmentIndex = Math.min(Math.floor(segmentT), segmentCount - 1);
-            const localT = segmentT - segmentIndex;
-
-            const wp1 = waypoints[segmentIndex];
-            const wp2 = waypoints[segmentIndex + 1];
-
-            if (!wp1.viewMatrix || !wp2.viewMatrix) return window.viewMatrix;
-
-            // Linear interpolation of view matrix elements
+            
+            const n = waypoints.length;
+            
+            // 전체 경로에서 현재 위치 계산
+            const segmentCount = n - 1;
+            const scaledT = t * segmentCount;
+            const segmentIndex = Math.min(Math.floor(scaledT), segmentCount - 1);
+            const localT = scaledT - segmentIndex;
+            
+            // 4개의 제어점 인덱스 (경계 처리 포함)
+            const i0 = Math.max(0, segmentIndex - 1);
+            const i1 = segmentIndex;
+            const i2 = Math.min(segmentIndex + 1, n - 1);
+            const i3 = Math.min(segmentIndex + 2, n - 1);
+            
+            const vm0 = waypoints[i0].viewMatrix;
+            const vm1 = waypoints[i1].viewMatrix;
+            const vm2 = waypoints[i2].viewMatrix;
+            const vm3 = waypoints[i3].viewMatrix;
+            
+            if (!vm0 || !vm1 || !vm2 || !vm3) return window.viewMatrix;
+            
+            // 각 행렬 요소에 Catmull-Rom 보간 적용
             const result = new Array(16);
             for (let i = 0; i < 16; i++) {
-                result[i] = wp1.viewMatrix[i] * (1 - localT) + wp2.viewMatrix[i] * localT;
+                result[i] = catmullRom(localT, vm0[i], vm1[i], vm2[i], vm3[i]);
             }
-
+            
             return result;
         }
-
+        
+        // 위치 스플라인 보간
         function interpolatePosition(t) {
             if (waypoints.length < 2) return waypoints[0]?.position || { x: 0, y: 0, z: 0 };
-
-            const segmentCount = waypoints.length - 1;
-            const segmentT = t * segmentCount;
-            const segmentIndex = Math.min(Math.floor(segmentT), segmentCount - 1);
-            const localT = segmentT - segmentIndex;
-
-            const p1 = waypoints[segmentIndex].position;
-            const p2 = waypoints[segmentIndex + 1].position;
-
+            
+            const n = waypoints.length;
+            const segmentCount = n - 1;
+            const scaledT = t * segmentCount;
+            const segmentIndex = Math.min(Math.floor(scaledT), segmentCount - 1);
+            const localT = scaledT - segmentIndex;
+            
+            // 4개의 제어점 인덱스
+            const i0 = Math.max(0, segmentIndex - 1);
+            const i1 = segmentIndex;
+            const i2 = Math.min(segmentIndex + 1, n - 1);
+            const i3 = Math.min(segmentIndex + 2, n - 1);
+            
+            const p0 = waypoints[i0].position;
+            const p1 = waypoints[i1].position;
+            const p2 = waypoints[i2].position;
+            const p3 = waypoints[i3].position;
+            
             return {
-                x: p1.x * (1 - localT) + p2.x * localT,
-                y: p1.y * (1 - localT) + p2.y * localT,
-                z: p1.z * (1 - localT) + p2.z * localT
+                x: catmullRom(localT, p0.x, p1.x, p2.x, p3.x),
+                y: catmullRom(localT, p0.y, p1.y, p2.y, p3.y),
+                z: catmullRom(localT, p0.z, p1.z, p2.z, p3.z)
             };
         }
 
