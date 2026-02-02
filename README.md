@@ -308,17 +308,20 @@ python manage.py visualize output/4dgs/black_cat/point_cloud --web
 │       └── 4dgs.yaml          # 4DGS 모델 설정
 ├── src/
 │   ├── json_sync_utils.py     # Unity→COLMAP/NeRF 변환 (핵심)
-│   ├── background_remover.py  # BiRefNet 배경 제거
-│   ├── depth_estimator.py     # MiDaS 깊이 추정
-│   ├── patch_4dgs_alpha.py    # Alpha + Loss Masking 패치
-│   ├── patch_4dgs_sfm_free.py # SfM-free 동작 패치
-│   ├── patch_4dgs_open3d.py   # open3d 의존성 제거 패치
-│   ├── patch_4dgs_camera_offset.py # 카메라 회전 패치
-│   ├── visualize_trajectory.py # Gaussian 궤적 시각화
+│   ├── adapters/              # 외부 모델 래퍼 (선택적)
+│   │   ├── background_remover.py  # BiRefNet 배경 제거
+│   │   ├── depth_estimator.py     # MiDaS 깊이 추정
+│   │   ├── rerun_vis.py           # Rerun 시각화
+│   │   └── visualize_trajectory.py # Gaussian 궤적 시각화
+│   ├── patches_4dgs/          # 4DGS 패치
+│   │   ├── alpha.py           # Alpha + Loss Masking 패치
+│   │   ├── sfm_free.py        # SfM-free 동작 패치
+│   │   ├── open3d.py          # open3d 의존성 제거 패치
+│   │   └── camera_offset.py   # 카메라 회전 패치
 │   ├── runner.py              # 학습/렌더링 실행기
 │   ├── setup.py               # 환경 설정 매니저
 │   ├── dataset.py             # 데이터셋 매니저
-│   └── model_registry.py     # 모델 레지스트리
+│   └── model_registry.py      # 모델 레지스트리
 ├── docs/experiments/          # 실험 기록
 ├── scripts/
 │   └── setup_server.sh        # 서버 자동 설치
@@ -405,25 +408,21 @@ self.original_image = image[:3,:,:]  # RGB만 사용, Alpha 버림
 
 결과: 투명 PNG를 사용해도 배경의 RGB 값이 그대로 학습됨 → 배경 형체가 point cloud에 나타남
 
-#### 우리의 해결책 (Alpha Patch + Loss Mask Patch)
+#### 우리의 해결책: Alpha Patch (`src/patches_4dgs/alpha.py`)
 
-**1. Alpha Patch** (`patch_4dgs_alpha_mask.py`)
+이 패치는 다음 기능을 포함합니다:
 - Alpha 채널 추출
 - GT 이미지를 흰색 배경에 합성 (--white_background와 매칭)
-
-```python
-# cameras.py (패치 후)
-if gt_alpha_mask is not None:
-    # RGB * alpha + white * (1 - alpha)
-    self.original_image = self.original_image * gt_alpha_mask + (1.0 - gt_alpha_mask)
-```
-
-**2. Loss Mask Patch** (`patch_4dgs_loss_mask.py`)
-- Loss 계산에서 배경 픽셀 제외
+- Loss 계산에서 배경 픽셀 제외 (Loss Masking)
 - 배경에 Gaussian이 형성되지 않음
 
 ```python
-# train.py (패치 후)
+# cameras.py (패치 후) - 흰색 배경 합성
+if gt_alpha_mask is not None:
+    # RGB * alpha + white * (1 - alpha)
+    self.original_image = self.original_image * gt_alpha_mask + (1.0 - gt_alpha_mask)
+
+# train.py (패치 후) - Loss Masking
 mask_binary = (combined_mask > 0.5).float()
 Ll1 = torch.abs(render * mask - gt * mask).sum() / mask.sum()
 ```
