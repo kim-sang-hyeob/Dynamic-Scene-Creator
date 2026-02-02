@@ -10,7 +10,7 @@ output/
 
 # Input files (raw data - videos, JSONs)
 inputs/*
-!inputs/.gitkeep
+!inputs/README.md
 
 # Data files (processed datasets)
 data/**/*.mp4
