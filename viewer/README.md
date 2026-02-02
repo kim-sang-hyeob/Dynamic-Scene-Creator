@@ -6,12 +6,15 @@
 
 ```
 viewer/
-└── web_viewer_final/        # 3DGS 경로 에디터 + 뷰어 + 녹화
-    ├── index.html           # UI + 에디터 로직
-    ├── hybrid.js            # WebGL Gaussian splat 렌더러
-    ├── bezier-math.js       # Natural Cubic Spline 경로 수학
-    ├── overlay-renderer.js  # WebGL2 오버레이 (커브, 포인트, 프러스텀)
-    └── server.py            # 프레임 이미지 저장 서버 (추후 사용)
+├── convert_ply_to_splat.py      # PLY → .splat 변환
+├── convert_4dgs_to_splatv.py    # 4DGS 학습 결과 → .splatv 변환
+├── merge_splat_files.py         # 3DGS(.splat) + 4DGS(.splatv) 병합
+└── web_viewer_final/            # 3DGS 경로 에디터 + 뷰어 + 녹화
+    ├── index.html               # UI + 에디터 로직
+    ├── hybrid.js                # WebGL Gaussian splat 렌더러
+    ├── bezier-math.js           # Natural Cubic Spline 경로 수학
+    ├── overlay-renderer.js      # WebGL2 오버레이 (커브, 포인트, 프러스텀)
+    └── server.py                # 프레임 이미지 저장 서버 (추후 사용)
 ```
 
 ---
@@ -124,17 +127,51 @@ python3 -m http.server 8090
 
 ---
 
+## 변환 스크립트
+
+### convert_ply_to_splat.py — PLY → .splat 변환
+
+3DGS 학습된 PLY 파일을 웹 뷰어용 `.splat` 포맷으로 변환합니다.
+
+```bash
+python convert_ply_to_splat.py <input.ply> -o <output.splat>
+```
+
+### convert_4dgs_to_splatv.py — 4DGS → .splatv 변환
+
+4D Gaussian Splatting 모델을 애니메이션 지원 `.splatv` 포맷으로 변환합니다.
+
+```bash
+python convert_4dgs_to_splatv.py <point_cloud_dir> -o <output.splatv>
+```
+
+### merge_splat_files.py — 배경 + 객체 병합
+
+정적 배경(.splat)과 동적 객체(.splatv)를 하나의 `.splatv` 파일로 병합합니다.
+
+```bash
+python merge_splat_files.py <background.splat> <object.splatv> -o <merged.splatv>
+
+# 객체 위치/크기 조정
+python merge_splat_files.py map.splat model.splatv -o merged.splatv \
+    --offset 1.5 0.0 -2.0 --scale 0.5
+```
+
+---
+
 ## 워크플로우
 
 ```bash
-# 경로 에디터 실행
-cd viewer/web_viewer_final
-python3 -m http.server 8090
+# 1. 배경 PLY → .splat 변환
+python convert_ply_to_splat.py background.ply -o map.splat
 
-# 1. .splat 파일 드래그앤드롭으로 맵 로드
-# 2. PLACE 모드에서 클릭으로 경로 제어점 배치
-# 3. 돔 카메라 설정 (Distance, Elevation 등) 조정
-# 4. ANIMATE 모드에서 경로 미리보기
-# 5. Record 버튼으로 WebM 녹화
-# 6. Save Path로 경로 JSON 내보내기
+# 2. 4DGS 모델 → .splatv 변환
+python convert_4dgs_to_splatv.py ./output/point_cloud/iteration_30000 -o model.splatv
+
+# 3. 배경 + 객체 병합
+python merge_splat_files.py map.splat model.splatv -o merged.splatv
+
+# 4. 경로 에디터 실행
+cd web_viewer_final && python3 -m http.server 8090
+# → .splat 드래그앤드롭 → 경로 편집 → WebM 녹화
 ```
