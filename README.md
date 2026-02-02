@@ -85,8 +85,8 @@ Unity Scene → Camera Tracking JSON → Diffusion Video Generation
 ## Features
 
 - **SfM-free**: Unity의 정확한 카메라 데이터를 직접 활용 (COLMAP 불필요)
-- **배경 제거 학습**: BiRefNet 배경 제거 + Alpha-aware Loss Masking
-- **MiDaS 깊이 초기화**: 단안 깊이 추정으로 전경 포인트 클라우드 생성
+- **배경 제거 학습**: BiRefNet 배경 제거 (`--remove-bg`) + Alpha-aware Loss Masking
+- **MiDaS 깊이 초기화** (선택적): 단안 깊이 추정으로 전경 포인트 클라우드 생성 (`--no-midas`로 비활성화 가능)
 - **Camera Rotation Rendering**: 학습된 모델을 다양한 각도에서 렌더링
 - **Configurable Coordinate Transform**: Unity↔NeRF 좌표 변환 파라미터 설정 가능
 - **Trajectory Visualization**: Rerun 기반 Gaussian 궤적 시각화
@@ -187,6 +187,7 @@ python manage.py process-unity \
 - `--resize 0.5` - 이미지 크기를 50%로 축소 (VRAM 절약)
 - `--resize 384x216` - 또는 특정 해상도로 지정 가능
 - `--remove-bg` - BiRefNet으로 배경 제거 (투명 PNG 생성, 학습 시 `--white_background` 필요)
+- `--no-midas` - MiDaS 깊이 추정 비활성화 (`--remove-bg` 사용 시 기본은 MiDaS 활성화)
 
 **입력 파일:**
 - `output_cat.mp4` - Diffusion 모델로 생성된 비디오
@@ -497,6 +498,7 @@ python manage.py setup --model 4dgs
 | `--map-pos` | 좌표 변환 위치 오버라이드 | `--map-pos "-150.85,-30.0,3.66"` |
 | `--map-scale` | 좌표 변환 스케일 오버라이드 | `--map-scale "3,3,3"` |
 | `--remove-bg` | BiRefNet으로 배경 제거 | `--remove-bg` |
+| `--no-midas` | MiDaS 깊이 추정 비활성화 | `--remove-bg --no-midas` |
 
 ### train 옵션
 
