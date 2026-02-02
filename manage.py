@@ -208,7 +208,8 @@ Examples:
         SetupManager(global_config, model_config).run()
 
     elif args.command == "process-unity":
-        from src.json_sync_utils import sync_video_with_json, DEFAULT_MAP_TRANSFORM
+        from src.converters import sync_video_with_json
+        from src.converters.coordinate import DEFAULT_MAP_TRANSFORM
         import numpy as np
 
         project_dir = os.path.join(data_root, args.output)
