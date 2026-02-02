@@ -329,9 +329,46 @@ python manage.py visualize output/4dgs/black_cat/point_cloud --web
 ├── docs/experiments/          # 실험 기록
 ├── scripts/
 │   └── setup_server.sh        # 서버 자동 설치
-├── data/                      # 입력 데이터 (gitignore)
+├── inputs/                    # 원본 입력 파일 (폴더만 git 추적)
+├── data/                      # 변환된 데이터셋 (gitignore)
 ├── external/4dgs/             # 4DGS 레포지토리 (gitignore)
 └── output/                    # 학습 출력 (gitignore)
+```
+
+## Data Flow
+
+원본 데이터에서 학습된 모델까지의 흐름입니다.
+
+```
+inputs/                          # 1. 원본 입력 파일
+├── black_cat/
+│   ├── output_cat.mp4           # Diffusion 생성 비디오
+│   ├── full_data.json           # Unity 카메라 트래킹
+│   └── original.mp4             # 원본 Unity 비디오
+│
+│   python manage.py process-unity inputs/black_cat/output_cat.mp4 \
+│       inputs/black_cat/full_data.json inputs/black_cat/original.mp4 \
+│       --output black_cat --frames 40 --resize 0.5
+│                    ↓ converters/
+│
+data/                            # 2. 변환된 4DGS 데이터셋
+├── black_cat/
+│   ├── images/                  # 추출된 프레임
+│   ├── transforms_train.json    # 카메라 매트릭스 (NeRF 포맷)
+│   ├── timestamps.json          # 프레임 타임스탬프
+│   ├── sparse/0/                # COLMAP 호환 포맷
+│   └── map_transform.json       # 좌표 변환 파라미터
+│
+│   python manage.py train data/black_cat
+│                    ↓ train
+│
+output/                          # 3. 학습된 모델
+└── 4dgs/
+    └── black_cat/
+        └── point_cloud/
+            └── iteration_30000/
+                ├── point_cloud.ply
+                └── deformation.pth
 ```
 
 ## Coordinate System
