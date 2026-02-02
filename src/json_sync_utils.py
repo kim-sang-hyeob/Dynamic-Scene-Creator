@@ -97,7 +97,7 @@ def save_map_transform(project_dir, map_transform):
         json.dump(data, f, indent=4)
     print(f"[JSON-Sync] Saved map_transform to {map_transform_path}")
 
-def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None, resize=None, max_frames=None, remove_bg=False):
+def sync_video_with_json(video_path, json_path, original_video_path, output_dir, map_transform=None, resize=None, max_frames=None, remove_bg=False, use_midas=True):
     """
     Synchronizes the JSON tracking data (from original video) with the Diffusion-generated video.
     Diffusion video is often faster (sped up) than the original tracking sequence.
@@ -106,6 +106,7 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
         resize: Optional tuple (width, height) or float scale factor (e.g., 0.5 for half size)
         max_frames: Optional int to limit number of frames (uniformly sampled, includes first and last)
         remove_bg: If True, remove background using BiRefNet (creates transparent PNGs)
+        use_midas: If True, use MiDaS for depth-based point initialization (default: True)
     """
     # Ensure absolute paths for safety on server
     output_dir = os.path.abspath(output_dir)
@@ -456,12 +457,15 @@ def write_colmap_text(frames, output_dir, img_dir=None, map_transform=None):
 
             # Try to load MiDaS depth estimator for better depth estimation
             depth_estimator = None
-            try:
-                from depth_estimator import DepthEstimator
-                depth_estimator = DepthEstimator("MiDaS_small")
-                print(f"[COLMAP] Using MiDaS for depth estimation (better point quality)")
-            except Exception as e:
-                print(f"[COLMAP] MiDaS not available ({e}), using distance-based depth")
+            if use_midas:
+                try:
+                    from depth_estimator import DepthEstimator
+                    depth_estimator = DepthEstimator("MiDaS_small")
+                    print(f"[COLMAP] Using MiDaS for depth estimation (better point quality)")
+                except Exception as e:
+                    print(f"[COLMAP] MiDaS not available ({e}), using distance-based depth")
+            else:
+                print(f"[COLMAP] MiDaS disabled, using distance-based depth")
 
             all_points = []
 

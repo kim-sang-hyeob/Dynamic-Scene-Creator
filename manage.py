@@ -87,6 +87,8 @@ Examples:
                               help="Limit number of frames (uniformly sampled, includes first and last)")
     parser_unity.add_argument("--remove-bg", action="store_true",
                               help="Remove background using BiRefNet (creates transparent PNGs)")
+    parser_unity.add_argument("--no-midas", action="store_true",
+                              help="Disable MiDaS depth estimation (use uniform depth instead)")
 
     # Command: train
     parser_train = subparsers.add_parser("train", parents=[parent_parser],
@@ -231,7 +233,7 @@ Examples:
                 # Format: scale factor (e.g., 0.5)
                 resize = float(args.resize)
 
-        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize, max_frames=args.frames, remove_bg=args.remove_bg)
+        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize, max_frames=args.frames, remove_bg=args.remove_bg, use_midas=not args.no_midas)
 
         if result:
             print(f"\n{'='*60}")
