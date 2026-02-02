@@ -87,6 +87,8 @@ Examples:
                               help="Limit number of frames (uniformly sampled, includes first and last)")
     parser_unity.add_argument("--remove-bg", action="store_true",
                               help="Remove background using BiRefNet (creates transparent PNGs)")
+    parser_unity.add_argument("--no-midas", action="store_true",
+                              help="Disable MiDaS depth estimation (use uniform depth instead)")
 
     # Command: process-viewer (Web viewer output → 4DGS dataset)
     parser_viewer = subparsers.add_parser("process-viewer",
@@ -219,7 +221,8 @@ Examples:
         SetupManager(global_config, model_config).run()
 
     elif args.command == "process-unity":
-        from src.json_sync_utils import sync_video_with_json, DEFAULT_MAP_TRANSFORM
+        from src.converters import sync_video_with_json
+        from src.converters.coordinate import DEFAULT_MAP_TRANSFORM
         import numpy as np
 
         project_dir = os.path.join(data_root, args.output)
@@ -244,7 +247,7 @@ Examples:
                 # Format: scale factor (e.g., 0.5)
                 resize = float(args.resize)
 
-        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize, max_frames=args.frames, remove_bg=args.remove_bg)
+        result = sync_video_with_json(args.video, args.json, args.original_video, project_dir, map_transform, resize=resize, max_frames=args.frames, remove_bg=args.remove_bg, use_midas=not args.no_midas)
 
         if result:
             print(f"\n{'='*60}")
@@ -305,12 +308,12 @@ Examples:
         Runner(global_config, model_config).train(args.scene_path, extra_args)
 
     elif args.command == "clean-model":
-        from src.filter_utils import clean_ply_model
+        from src.utils.filter import clean_ply_model
         output = args.output if args.output else args.ply_path.replace(".ply", "_cleaned.ply")
         clean_ply_model(args.ply_path, output, nb_neighbors=args.neighbors)
 
     elif args.command == "remove-bg":
-        from src.background_remover import process_video
+        from src.adapters.background_remover import process_video
 
         # Parse resize
         resize = None
@@ -340,8 +343,8 @@ Examples:
         print(f"  2. Train: python manage.py train {output_dir} --extra=\"--white_background\"")
 
     elif args.command == "prepare-alpha":
-        from src.background_remover import process_video
-        from src.create_sparse_from_images import create_colmap_sparse
+        from src.adapters.background_remover import process_video
+        from src.converters.sparse_from_images import create_colmap_sparse
 
         # Parse resize
         resize = None
@@ -384,16 +387,16 @@ Examples:
         print(f"  python manage.py train data/{args.output} --extra=\"--white_background\"")
 
     elif args.command == "create-sparse":
-        from src.create_sparse_from_images import create_colmap_sparse
+        from src.converters.sparse_from_images import create_colmap_sparse
         create_colmap_sparse(args.images_dir, fov=args.fov)
         print(f"\n[Done] Sparse files created. Ready for training!")
 
     elif args.command == "visualize":
-        from src.rerun_vis import run_visualization
+        from src.adapters.rerun_vis import run_visualization
         run_visualization(args.dir, watch=args.watch, web=args.web, save_path=args.save)
 
     elif args.command == "trajectory":
-        from src.visualize_trajectory import load_gaussian_model, compute_trajectories, compute_movement_stats, save_trajectories_ply, visualize_with_rerun
+        from src.adapters.visualize_trajectory import load_gaussian_model, compute_trajectories, compute_movement_stats, save_trajectories_ply, visualize_with_rerun
         try:
             gaussians, deform, iteration = load_gaussian_model(args.model_path)
             trajectories, times, indices = compute_trajectories(
@@ -426,7 +429,7 @@ Examples:
         DatasetManager(global_config).download(args.dataset)
 
     elif args.command == "export-splat":
-        from src.exporter import convert_ply_to_splat
+        from src.utils.exporter import convert_ply_to_splat
         convert_ply_to_splat(args.input, args.output)
 
     elif args.command == "run-api":

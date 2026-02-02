@@ -85,8 +85,8 @@ Unity Scene → Camera Tracking JSON → Diffusion Video Generation
 ## Features
 
 - **SfM-free**: Unity의 정확한 카메라 데이터를 직접 활용 (COLMAP 불필요)
-- **배경 제거 학습**: BiRefNet 배경 제거 + Alpha-aware Loss Masking
-- **MiDaS 깊이 초기화**: 단안 깊이 추정으로 전경 포인트 클라우드 생성
+- **배경 제거 학습**: BiRefNet 배경 제거 (`--remove-bg`) + Alpha-aware Loss Masking
+- **MiDaS 깊이 초기화** (선택적): 단안 깊이 추정으로 전경 포인트 클라우드 생성 (`--no-midas`로 비활성화 가능)
 - **Camera Rotation Rendering**: 학습된 모델을 다양한 각도에서 렌더링
 - **Configurable Coordinate Transform**: Unity↔NeRF 좌표 변환 파라미터 설정 가능
 - **Trajectory Visualization**: Rerun 기반 Gaussian 궤적 시각화
@@ -187,6 +187,7 @@ python manage.py process-unity \
 - `--resize 0.5` - 이미지 크기를 50%로 축소 (VRAM 절약)
 - `--resize 384x216` - 또는 특정 해상도로 지정 가능
 - `--remove-bg` - BiRefNet으로 배경 제거 (투명 PNG 생성, 학습 시 `--white_background` 필요)
+- `--no-midas` - MiDaS 깊이 추정 비활성화 (`--remove-bg` 사용 시 기본은 MiDaS 활성화)
 
 **입력 파일:**
 - `output_cat.mp4` - Diffusion 모델로 생성된 비디오
@@ -306,24 +307,73 @@ python manage.py visualize output/4dgs/black_cat/point_cloud --web
 │   └── models/
 │       └── 4dgs.yaml          # 4DGS 모델 설정
 ├── src/
-│   ├── json_sync_utils.py     # Unity→COLMAP/NeRF 변환 (핵심)
-│   ├── background_remover.py  # BiRefNet 배경 제거
-│   ├── depth_estimator.py     # MiDaS 깊이 추정
-│   ├── patch_4dgs_alpha.py    # Alpha + Loss Masking 패치
-│   ├── patch_4dgs_sfm_free.py # SfM-free 동작 패치
-│   ├── patch_4dgs_open3d.py   # open3d 의존성 제거 패치
-│   ├── patch_4dgs_camera_offset.py # 카메라 회전 패치
-│   ├── visualize_trajectory.py # Gaussian 궤적 시각화
+│   ├── converters/            # ★ Unity → 4DGS 데이터 변환 (핵심)
+│   │   ├── frame_extractor.py     # 비디오 프레임 추출 + JSON 동기화
+│   │   ├── coordinate.py          # Unity ↔ NeRF 좌표계 변환
+│   │   ├── colmap_writer.py       # COLMAP sparse 포맷 생성
+│   │   ├── nerf_writer.py         # transforms_train.json 생성
+│   │   └── sparse_from_images.py  # 이미지 → COLMAP sparse (Unity 없이)
+│   ├── adapters/              # 외부 모델/도구 래퍼
+│   │   ├── background_remover.py  # BiRefNet 배경 제거
+│   │   ├── depth_estimator.py     # MiDaS 깊이 추정
+│   │   ├── camera_transform.py    # 렌더링용 카메라 변환
+│   │   ├── rerun_vis.py           # Rerun 시각화
+│   │   └── visualize_trajectory.py # Gaussian 궤적 시각화
+│   ├── patches_4dgs/          # 4DGS 패치 (setup 시 적용)
+│   │   ├── alpha.py           # Alpha + Loss Masking 패치
+│   │   ├── sfm_free.py        # SfM-free 동작 패치
+│   │   ├── open3d.py          # open3d 의존성 제거 패치
+│   │   └── camera_offset.py   # 카메라 회전 패치
+│   ├── utils/                 # 유틸리티
+│   │   ├── filter.py          # PLY floater 제거
+│   │   └── exporter.py        # PLY → splat 변환
 │   ├── runner.py              # 학습/렌더링 실행기
 │   ├── setup.py               # 환경 설정 매니저
 │   ├── dataset.py             # 데이터셋 매니저
-│   └── model_registry.py     # 모델 레지스트리
+│   └── model_registry.py      # 모델 레지스트리
 ├── docs/experiments/          # 실험 기록
 ├── scripts/
 │   └── setup_server.sh        # 서버 자동 설치
-├── data/                      # 입력 데이터 (gitignore)
+├── inputs/                    # 원본 입력 파일 (폴더만 git 추적)
+├── data/                      # 변환된 데이터셋 (gitignore)
 ├── external/4dgs/             # 4DGS 레포지토리 (gitignore)
 └── output/                    # 학습 출력 (gitignore)
+```
+
+## Data Flow
+
+원본 데이터에서 학습된 모델까지의 흐름입니다.
+
+```
+inputs/                          # 1. 원본 입력 파일
+├── black_cat/
+│   ├── output_cat.mp4           # Diffusion 생성 비디오
+│   ├── full_data.json           # Unity 카메라 트래킹
+│   └── original.mp4             # 원본 Unity 비디오
+│
+│   python manage.py process-unity inputs/black_cat/output_cat.mp4 \
+│       inputs/black_cat/full_data.json inputs/black_cat/original.mp4 \
+│       --output black_cat --frames 40 --resize 0.5
+│                    ↓ converters/
+│
+data/                            # 2. 변환된 4DGS 데이터셋
+├── black_cat/
+│   ├── images/                  # 추출된 프레임
+│   ├── transforms_train.json    # 카메라 매트릭스 (NeRF 포맷)
+│   ├── timestamps.json          # 프레임 타임스탬프
+│   ├── sparse/0/                # COLMAP 호환 포맷
+│   └── map_transform.json       # 좌표 변환 파라미터
+│
+│   python manage.py train data/black_cat
+│                    ↓ train
+│
+output/                          # 3. 학습된 모델
+└── 4dgs/
+    └── black_cat/
+        └── point_cloud/
+            └── iteration_30000/
+                ├── point_cloud.ply
+                └── deformation.pth
 ```
 
 ## Coordinate System
@@ -404,25 +454,21 @@ self.original_image = image[:3,:,:]  # RGB만 사용, Alpha 버림
 
 결과: 투명 PNG를 사용해도 배경의 RGB 값이 그대로 학습됨 → 배경 형체가 point cloud에 나타남
 
-#### 우리의 해결책 (Alpha Patch + Loss Mask Patch)
+#### 우리의 해결책: Alpha Patch (`src/patches_4dgs/alpha.py`)
 
-**1. Alpha Patch** (`patch_4dgs_alpha_mask.py`)
+이 패치는 다음 기능을 포함합니다:
 - Alpha 채널 추출
 - GT 이미지를 흰색 배경에 합성 (--white_background와 매칭)
-
-```python
-# cameras.py (패치 후)
-if gt_alpha_mask is not None:
-    # RGB * alpha + white * (1 - alpha)
-    self.original_image = self.original_image * gt_alpha_mask + (1.0 - gt_alpha_mask)
-```
-
-**2. Loss Mask Patch** (`patch_4dgs_loss_mask.py`)
-- Loss 계산에서 배경 픽셀 제외
+- Loss 계산에서 배경 픽셀 제외 (Loss Masking)
 - 배경에 Gaussian이 형성되지 않음
 
 ```python
-# train.py (패치 후)
+# cameras.py (패치 후) - 흰색 배경 합성
+if gt_alpha_mask is not None:
+    # RGB * alpha + white * (1 - alpha)
+    self.original_image = self.original_image * gt_alpha_mask + (1.0 - gt_alpha_mask)
+
+# train.py (패치 후) - Loss Masking
 mask_binary = (combined_mask > 0.5).float()
 Ll1 = torch.abs(render * mask - gt * mask).sum() / mask.sum()
 ```
@@ -497,6 +543,7 @@ python manage.py setup --model 4dgs
 | `--map-pos` | 좌표 변환 위치 오버라이드 | `--map-pos "-150.85,-30.0,3.66"` |
 | `--map-scale` | 좌표 변환 스케일 오버라이드 | `--map-scale "3,3,3"` |
 | `--remove-bg` | BiRefNet으로 배경 제거 | `--remove-bg` |
+| `--no-midas` | MiDaS 깊이 추정 비활성화 | `--remove-bg --no-midas` |
 
 ### train 옵션
 

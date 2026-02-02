@@ -3,7 +3,7 @@
 Monocular depth estimation using MiDaS for better initial point cloud generation.
 
 Usage:
-    from depth_estimator import DepthEstimator
+    from src.adapters.depth_estimator import DepthEstimator
 
     estimator = DepthEstimator()
     depth_map = estimator.estimate(image)  # Returns relative depth map

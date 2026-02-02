@@ -8,7 +8,11 @@ external/
 # Training outputs
 output/
 
-# Data files (manage separately)
+# Input files (raw data - videos, JSONs)
+inputs/*
+!inputs/README.md
+
+# Data files (processed datasets)
 data/**/*.mp4
 data/**/*.avi
 data/**/*.mov
