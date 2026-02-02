@@ -457,9 +457,27 @@ const fragmentShaderSource = `
   
   `.trim();
 
-let defaultViewMatrix = [0.55, 0.54, -0.64, 0, 0.83, -0.23, 0.52, 0, 0.13, -0.81, -0.57, 0, 0.25, -0.13, 4.52, 1];
+// Default camera: Position (-1.32, 1.59, 2.84), Rotation (153°, -14°, -176°)
+// Adjusted for tilted map.splat to appear level
+let defaultViewMatrix = [
+  -0.97, 0.13, 0.22, 0,
+  0.04, 0.91, -0.41, 0,
+  -0.25, -0.39, -0.89, 0,
+  -1.32, 1.59, 2.84, 1
+];
 
 let viewMatrix = defaultViewMatrix;
+window.viewMatrix = viewMatrix; // Expose to global scope for editor
+window.defaultViewMatrix = defaultViewMatrix; // Expose for mapUp extraction
+
+// Allow external control of viewMatrix for path playback
+window.setViewMatrix = function (newMatrix) {
+  if (newMatrix && newMatrix.length === 16) {
+    viewMatrix = [...newMatrix];
+    window.viewMatrix = viewMatrix;
+  }
+};
+
 async function main() {
   let carousel = false;
   const params = new URLSearchParams(location.search);
@@ -489,7 +507,9 @@ async function main() {
 
   const gl = canvas.getContext("webgl2", {
     antialias: false,
+    preserveDrawingBuffer: true,  // Required for toDataURL capture
   });
+  window.gl = gl;
 
   const vertexShader = gl.createShader(gl.VERTEX_SHADER);
   gl.shaderSource(vertexShader, vertexShaderSource);
@@ -549,6 +569,7 @@ async function main() {
     gl.uniform2fv(u_focal, new Float32Array([camera.fx, camera.fy]));
 
     projectionMatrix = getProjectionMatrix(camera.fx, camera.fy, innerWidth, innerHeight);
+    window.projectionMatrix = projectionMatrix;
 
     gl.uniform2fv(u_viewport, new Float32Array([innerWidth, innerHeight]));
 
@@ -624,7 +645,8 @@ async function main() {
       location.hash = "#" + JSON.stringify(viewMatrix.map((k) => Math.round(k * 100) / 100));
       //   camid.innerText = "";
     } else if (e.code === "KeyP") {
-      carousel = true;
+      // Disabled - P key is now used for waypoints in editor
+      // carousel = true;
       //   camid.innerText = "";
     } else if (e.code === "KeyM") {
       // Mark position - get the point the camera is looking at
@@ -669,8 +691,13 @@ async function main() {
   window.addEventListener(
     "wheel",
     (e) => {
+      // Allow scrolling in the sidebar
+      if (e.target.closest('#sidebar')) return;
+
       carousel = false;
       e.preventDefault();
+      // Block camera changes during editor animation
+      if (window.editorMode === 'ANIMATE' && window.editorAnimating) return;
       const lineHeight = 10;
       const scale = e.deltaMode == 1 ? lineHeight : e.deltaMode == 2 ? innerHeight : 1;
       let inv = invert4(viewMatrix);
@@ -696,8 +723,22 @@ async function main() {
     e.preventDefault();
     startX = e.clientX;
     startY = e.clientY;
-    // Left click = 1 (orbit), Right click or Shift = 2 (pan)
-    if (e.button === 2 || e.shiftKey) {
+
+    const mode = window.editorMode || 'VIEW';
+
+    // Block camera orbit/pan during editor animation
+    if (mode === 'ANIMATE' && window.editorAnimating) {
+      down = false;
+      return;
+    }
+
+    if (e.button === 0 && (mode === 'PLACE' || mode === 'SELECT')) {
+      // In PLACE/SELECT mode, left click is for editor interaction
+      down = 3; // Editor mode (no camera movement)
+      if (window.onEditorClick) {
+        window.onEditorClick(e.clientX, e.clientY, mode);
+      }
+    } else if (e.button === 2 || e.shiftKey) {
       down = 2; // Pan
     } else {
       down = 1; // Orbit
@@ -709,6 +750,13 @@ async function main() {
 
   canvas.addEventListener("mousemove", (e) => {
     e.preventDefault();
+    if (down == 3) {
+      // Editor drag mode
+      if (window.onEditorDrag) {
+        window.onEditorDrag(e.clientX, e.clientY);
+      }
+      return;
+    }
     if (down == 1) {
       let inv = invert4(viewMatrix);
       let dx = (8 * (e.clientX - startX)) / innerWidth;
@@ -729,7 +777,7 @@ async function main() {
     } else if (down == 2) {
       let inv = invert4(viewMatrix);
       // Pan: X for horizontal, Y for vertical
-      inv = translate4(inv, (-10 * (e.clientX - startX)) / innerWidth, (10 * (e.clientY - startY)) / innerHeight, 0);
+      inv = translate4(inv, (-10 * (e.clientX - startX)) / innerWidth, (-10 * (e.clientY - startY)) / innerHeight, 0);
       // inv[13] = preY;
       viewMatrix = invert4(inv);
 
@@ -739,6 +787,9 @@ async function main() {
   });
   canvas.addEventListener("mouseup", (e) => {
     e.preventDefault();
+    if (down === 3 && window.onEditorDragEnd) {
+      window.onEditorDragEnd(e.clientX, e.clientY);
+    }
     down = false;
     startX = 0;
     startY = 0;
@@ -750,6 +801,8 @@ async function main() {
     "touchstart",
     (e) => {
       e.preventDefault();
+      // Block touch camera control during editor animation
+      if (window.editorMode === 'ANIMATE' && window.editorAnimating) { down = false; return; }
       if (e.touches.length === 1) {
         carousel = false;
         startX = e.touches[0].clientX;
@@ -847,122 +900,61 @@ async function main() {
   let leftGamepadTrigger, rightGamepadTrigger;
 
   const frame = (now) => {
+    // Skip keyboard/gamepad camera controls during animation
+    const isAnimating = window.editorMode === 'ANIMATE' && window.editorAnimating;
+
     let inv = invert4(viewMatrix);
     let shiftKey = activeKeys.includes("Shift") || activeKeys.includes("ShiftLeft") || activeKeys.includes("ShiftRight");
 
-    if (activeKeys.includes("ArrowUp")) {
-      if (shiftKey) {
-        inv = translate4(inv, 0, -0.03, 0);
-      } else {
+    if (!isAnimating) {
+      if (activeKeys.includes("ArrowUp")) {
+        if (shiftKey) {
+          inv = translate4(inv, 0, -0.03, 0);
+        } else {
+          inv = translate4(inv, 0, 0, 0.1);
+        }
+      }
+      if (activeKeys.includes("ArrowDown")) {
+        if (shiftKey) {
+          inv = translate4(inv, 0, 0.03, 0);
+        } else {
+          inv = translate4(inv, 0, 0, -0.1);
+        }
+      }
+      if (activeKeys.includes("ArrowLeft")) inv = translate4(inv, -0.03, 0, 0);
+      if (activeKeys.includes("ArrowRight")) inv = translate4(inv, 0.03, 0, 0);
+      // WASD: movement, QE: vertical (3DGS convention: +Y=down, +Z=forward)
+      if (activeKeys.includes("KeyW")) inv = translate4(inv, 0, 0, 0.1);
+      if (activeKeys.includes("KeyS")) inv = translate4(inv, 0, 0, -0.1);
+      if (activeKeys.includes("KeyA")) inv = translate4(inv, -0.05, 0, 0);
+      if (activeKeys.includes("KeyD")) inv = translate4(inv, 0.05, 0, 0);
+      if (activeKeys.includes("KeyE")) inv = translate4(inv, 0, -0.05, 0);
+      if (activeKeys.includes("KeyQ")) inv = translate4(inv, 0, 0.05, 0);
+      if (activeKeys.includes("BracketLeft")) {
+        camera.fx /= 1.01;
+        camera.fy /= 1.01;
         inv = translate4(inv, 0, 0, 0.1);
+        resize();
       }
-    }
-    if (activeKeys.includes("ArrowDown")) {
-      if (shiftKey) {
-        inv = translate4(inv, 0, 0.03, 0);
-      } else {
+      if (activeKeys.includes("BracketRight")) {
+        camera.fx *= 1.01;
+        camera.fy *= 1.01;
         inv = translate4(inv, 0, 0, -0.1);
-      }
-    }
-    if (activeKeys.includes("ArrowLeft")) inv = translate4(inv, -0.03, 0, 0);
-    //
-    if (activeKeys.includes("ArrowRight")) inv = translate4(inv, 0.03, 0, 0);
-    // inv = rotate4(inv, 0.01, 0, 1, 0);
-    if (activeKeys.includes("KeyA")) inv = rotate4(inv, -0.01, 0, 1, 0);
-    if (activeKeys.includes("KeyD")) inv = rotate4(inv, 0.01, 0, 1, 0);
-    if (activeKeys.includes("KeyQ")) inv = rotate4(inv, 0.01, 0, 0, 1);
-    if (activeKeys.includes("KeyE")) inv = rotate4(inv, -0.01, 0, 0, 1);
-    if (activeKeys.includes("KeyW")) inv = rotate4(inv, 0.005, 1, 0, 0);
-    if (activeKeys.includes("KeyS")) inv = rotate4(inv, -0.005, 1, 0, 0);
-    if (activeKeys.includes("BracketLeft")) {
-      camera.fx /= 1.01;
-      camera.fy /= 1.01;
-      inv = translate4(inv, 0, 0, 0.1);
-      resize();
-    }
-    if (activeKeys.includes("BracketRight")) {
-      camera.fx *= 1.01;
-      camera.fy *= 1.01;
-      inv = translate4(inv, 0, 0, -0.1);
-      resize();
-    }
-    // console.log(activeKeys);
-
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    let isJumping = activeKeys.includes("Space");
-    for (let gamepad of gamepads) {
-      if (!gamepad) continue;
-
-      const axisThreshold = 0.1; // Threshold to detect when the axis is intentionally moved
-      const moveSpeed = 0.06;
-      const rotateSpeed = 0.02;
-
-      // Assuming the left stick controls translation (axes 0 and 1)
-      if (Math.abs(gamepad.axes[0]) > axisThreshold) {
-        inv = translate4(inv, moveSpeed * gamepad.axes[0], 0, 0);
-        carousel = false;
-      }
-      if (Math.abs(gamepad.axes[1]) > axisThreshold) {
-        inv = translate4(inv, 0, 0, -moveSpeed * gamepad.axes[1]);
-        carousel = false;
-      }
-      if (gamepad.buttons[12].pressed || gamepad.buttons[13].pressed) {
-        inv = translate4(inv, 0, -moveSpeed * (gamepad.buttons[12].pressed - gamepad.buttons[13].pressed), 0);
-        carousel = false;
+        resize();
       }
 
-      if (gamepad.buttons[14].pressed || gamepad.buttons[15].pressed) {
-        inv = translate4(inv, -moveSpeed * (gamepad.buttons[14].pressed - gamepad.buttons[15].pressed), 0, 0);
-        carousel = false;
+      if (["KeyJ", "KeyK", "KeyL", "KeyI"].some((k) => activeKeys.includes(k))) {
+        let d = 4;
+        inv = translate4(inv, 0, 0, d);
+        inv = rotate4(inv, activeKeys.includes("KeyJ") ? -0.05 : activeKeys.includes("KeyL") ? 0.05 : 0, 0, 1, 0);
+        inv = rotate4(inv, activeKeys.includes("KeyI") ? 0.05 : activeKeys.includes("KeyK") ? -0.05 : 0, 1, 0, 0);
+        inv = translate4(inv, 0, 0, -d);
       }
 
-      // Assuming the right stick controls rotation (axes 2 and 3)
-      if (Math.abs(gamepad.axes[2]) > axisThreshold) {
-        inv = rotate4(inv, rotateSpeed * gamepad.axes[2], 0, 1, 0);
-        carousel = false;
-      }
-      if (Math.abs(gamepad.axes[3]) > axisThreshold) {
-        inv = rotate4(inv, -rotateSpeed * gamepad.axes[3], 1, 0, 0);
-        carousel = false;
-      }
+      viewMatrix = invert4(inv);
+    } // end !isAnimating
 
-      let tiltAxis = gamepad.buttons[6].value - gamepad.buttons[7].value;
-      if (Math.abs(tiltAxis) > axisThreshold) {
-        inv = rotate4(inv, rotateSpeed * tiltAxis, 0, 0, 1);
-        carousel = false;
-      }
-      if (gamepad.buttons[4].pressed && !leftGamepadTrigger) {
-        camera = cameras[(cameras.indexOf(camera) + 1) % cameras.length];
-        inv = invert4(getViewMatrix(camera));
-        carousel = false;
-      }
-      if (gamepad.buttons[5].pressed && !rightGamepadTrigger) {
-        camera = cameras[(cameras.indexOf(camera) + cameras.length - 1) % cameras.length];
-        inv = invert4(getViewMatrix(camera));
-        carousel = false;
-      }
-      leftGamepadTrigger = gamepad.buttons[4].pressed;
-      rightGamepadTrigger = gamepad.buttons[5].pressed;
-      if (gamepad.buttons[0].pressed) {
-        isJumping = true;
-        carousel = false;
-      }
-      if (gamepad.buttons[3].pressed) {
-        carousel = true;
-      }
-    }
-
-    if (["KeyJ", "KeyK", "KeyL", "KeyI"].some((k) => activeKeys.includes(k))) {
-      let d = 4;
-      inv = translate4(inv, 0, 0, d);
-      inv = rotate4(inv, activeKeys.includes("KeyJ") ? -0.05 : activeKeys.includes("KeyL") ? 0.05 : 0, 0, 1, 0);
-      inv = rotate4(inv, activeKeys.includes("KeyI") ? 0.05 : activeKeys.includes("KeyK") ? -0.05 : 0, 1, 0, 0);
-      inv = translate4(inv, 0, 0, -d);
-    }
-
-    viewMatrix = invert4(inv);
-
-    if (carousel) {
+    if (!isAnimating && carousel) {
       let inv = invert4(defaultViewMatrix);
 
       const t = Math.sin((Date.now() - start) / 5000);
@@ -972,6 +964,7 @@ async function main() {
       viewMatrix = invert4(inv);
     }
 
+    let isJumping = !isAnimating && activeKeys.includes("Space");
     if (isJumping) {
       jumpDelta = Math.min(1, jumpDelta + 0.05);
     } else {
@@ -991,11 +984,33 @@ async function main() {
 
     if (vertexCount > 0) {
       document.getElementById("spinner").style.display = "none";
+      gl.useProgram(program); // Ensure splat program is active
+      gl.bindVertexArray(null); // Unbind any overlay VAO
+      // Re-bind splat buffers
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.enableVertexAttribArray(a_position);
+      gl.vertexAttribPointer(a_position, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
+      gl.enableVertexAttribArray(a_index);
+      gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
+      gl.vertexAttribDivisor(a_index, 1);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+
       gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
       gl.uniform1f(u_time, Math.sin(Date.now() / 1000) / 2 + 1 / 2);
 
+      // Splat blend mode
+      gl.blendFuncSeparate(gl.ONE_MINUS_DST_ALPHA, gl.ONE, gl.ONE_MINUS_DST_ALPHA, gl.ONE);
+      gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
+
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
+
+      // Render overlay (bezier curves, control points) on top
+      if (window.OverlayRenderer && window.OverlayRenderer.gl) {
+        window.OverlayRenderer.render(actualViewMatrix, projectionMatrix);
+      }
     } else {
       gl.clear(gl.COLOR_BUFFER_BIT);
       document.getElementById("spinner").style.display = "";
@@ -1009,6 +1024,7 @@ async function main() {
     }
     fps.innerText = Math.round(avgFps) + " fps";
     lastFrame = now;
+    window.viewMatrix = viewMatrix; // Sync for editor access
     requestAnimationFrame(frame);
   };
 
@@ -1116,6 +1132,21 @@ async function main() {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, chunk.texwidth, chunk.texheight, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, texdata);
+
+        // Extract Gaussian positions for picking
+        if (remaining === 0) {
+          const texF = new Float32Array(buffer);
+          const gCount = Math.floor(texF.length / 16);
+          const gPositions = new Float32Array(gCount * 3);
+          for (let i = 0; i < gCount; i++) {
+            gPositions[3 * i] = texF[16 * i];
+            gPositions[3 * i + 1] = texF[16 * i + 1];
+            gPositions[3 * i + 2] = texF[16 * i + 2];
+          }
+          window.gaussianPositions = gPositions;
+          window.gaussianCount = gCount;
+          console.log('Gaussian positions extracted:', gCount, 'points');
+        }
       }
     } else if (!remaining) {
       console.log("chunk", chunk, buffer);
