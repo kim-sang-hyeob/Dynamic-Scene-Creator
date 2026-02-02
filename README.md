@@ -307,13 +307,17 @@ python manage.py visualize output/4dgs/black_cat/point_cloud --web
 │   └── models/
 │       └── 4dgs.yaml          # 4DGS 모델 설정
 ├── src/
-│   ├── json_sync_utils.py     # Unity→COLMAP/NeRF 변환 (핵심)
+│   ├── converters/            # ★ Unity → 4DGS 데이터 변환 (핵심)
+│   │   ├── frame_extractor.py     # 비디오 프레임 추출 + JSON 동기화
+│   │   ├── coordinate.py          # Unity ↔ NeRF 좌표계 변환
+│   │   ├── colmap_writer.py       # COLMAP sparse 포맷 생성
+│   │   └── nerf_writer.py         # transforms_train.json 생성
 │   ├── adapters/              # 외부 모델 래퍼 (선택적)
 │   │   ├── background_remover.py  # BiRefNet 배경 제거
 │   │   ├── depth_estimator.py     # MiDaS 깊이 추정
 │   │   ├── rerun_vis.py           # Rerun 시각화
 │   │   └── visualize_trajectory.py # Gaussian 궤적 시각화
-│   ├── patches_4dgs/          # 4DGS 패치
+│   ├── patches_4dgs/          # 4DGS 패치 (setup 시 적용)
 │   │   ├── alpha.py           # Alpha + Loss Masking 패치
 │   │   ├── sfm_free.py        # SfM-free 동작 패치
 │   │   ├── open3d.py          # open3d 의존성 제거 패치
