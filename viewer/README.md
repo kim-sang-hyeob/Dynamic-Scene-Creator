@@ -1,16 +1,21 @@
-# Viewer - 4DGS 시각화 도구
+# Viewer - 4DGS 시각화 및 경로 편집 도구
 
-4D Gaussian Splatting 모델을 웹에서 시각화하기 위한 변환 스크립트와 웹 뷰어 모음입니다.
+4D Gaussian Splatting 모델을 웹에서 시각화하고, 카메라 경로를 편집/녹화하기 위한 도구입니다.
 
 ## 구성
 
-| 폴더/파일 | 설명 |
-|------|------|
-| `convert_ply_to_splat.py` | PLY → .splat 변환 |
-| `convert_4dgs_to_splatv.py` | 4DGS → .splatv 변환 |
-| `merge_splat_files.py` | .splat + .splatv 병합 |
-| `web_viewer/` | 웹 기반 뷰어 |
-| `web_path_editor/` | 카메라 경로 레코더 |
+```
+viewer/
+├── convert_ply_to_splat.py      # PLY → .splat 변환
+├── convert_4dgs_to_splatv.py    # 4DGS 학습 결과 → .splatv 변환
+├── merge_splat_files.py         # 3DGS(.splat) + 4DGS(.splatv) 병합
+└── web_viewer_final/            # 3DGS 경로 에디터 + 뷰어 + 녹화
+    ├── index.html               # UI + 에디터 로직
+    ├── hybrid.js                # WebGL Gaussian splat 렌더러
+    ├── bezier-math.js           # Natural Cubic Spline 경로 수학
+    ├── overlay-renderer.js      # WebGL2 오버레이 (커브, 포인트, 프러스텀)
+    └── server.py                # 프레임 이미지 저장 서버 (추후 사용)
+```
 
 ---
 
@@ -21,8 +26,6 @@
 3DGS로 학습된 PLY 파일을 웹 뷰어용 `.splat` 포맷으로 변환합니다.
 
 ```bash
-python convert_ply_to_splat.py <input.ply> -o <output.splat>
-
 # 예시: 단일 파일 변환
 python convert_ply_to_splat.py point_cloud.ply -o map.splat
 
@@ -35,6 +38,19 @@ python convert_ply_to_splat.py *.ply
 |------|------|
 | `input_files` | 입력 PLY 파일 (필수, 여러 개 가능) |
 | `-o, --output` | 출력 파일 경로 (단일 파일 입력 시만 유효) |
+
+**설정 위치:** `web_viewer_final/hybrid.js` 내 `defaultViewMatrix`
+```javascript
+let defaultViewMatrix = [
+  -0.97, 0.13, 0.22, 0,
+  0.04, 0.91, -0.41, 0,
+  -0.25, -0.39, -0.89, 0,
+  -1.32, 1.59, 2.84, 1
+];
+```
+
+**주의:** 저장되는 카메라 좌표는 **기울어진 좌표계 기준**입니다.
+- 다른 시스템(Unity 등)에서 사용 시 좌표 변환 필요
 
 ---
 
@@ -101,121 +117,96 @@ python merge_splat_files.py map.splat model.splatv -o merged.splatv \
 
 ---
 
-## 📍 web_path_editor (Camera Path Recorder) 
+## 🎬 web_viewer_final (경로 에디터)
 
-3DGS 맵 위에서 카메라 경로를 기록하고 영상을 촬영하는 도구입니다.
+3DGS 맵 위에서 **Natural Cubic Spline** 곡선 경로를 편집하고, 돔 카메라로 경로를 따라가며 WebM 영상을 녹화하는 도구입니다.
 
 ### 실행
 
 ```bash
-cd web_path_editor
-python server.py
+cd viewer/web_viewer_final
+python3 -m http.server 8090
 ```
 
-브라우저에서 http://localhost:8074 접속 (server.py 에 정의된 포트 사용)
+브라우저에서 http://localhost:8090 접속 → `.splat` 파일 드래그앤드롭
 
-### 조작법
+### 주요 기능
 
-| 조작 | 기능 |
-|------|------|
-| 마우스 드래그 | 카메라 회전 (Orbit) |
-| 우클릭 드래그 / Shift+드래그 | 카메라 이동 (Pan) |
-| 마우스 휠 | 줌 인/아웃 |
-| **P 키** | 현재 카메라 위치에 웨이포인트 추가 |
+- **Gaussian Picking**: 화면 클릭 시 가장 가까운 Gaussian의 3D 위치에 제어점 배치
+- **Natural Cubic Spline 보간**: 제어점을 C2 연속 곡선으로 자동 연결 (자연 3차 스플라인)
+- **돔 카메라 시스템**: 경로의 수평 접선(tangent)을 따라가며 수평 유지
+- **지면 자동 감지**: 제어점들의 높이 분포에서 mapUp 방향을 자동 추출
+- **WebGL 오버레이**: Gaussian splat 위에 경로 커브 + 제어점 + 카메라 프러스텀 렌더링
+- **WebM 녹화**: VP9 코덱, 40Mbps 고화질 녹화 (녹화 중 오버레이 자동 숨김)
+- **JSON 내보내기/불러오기**: 경로 데이터 저장 및 재사용
 
-### 워크플로우
+### 에디터 모드
 
-1. `.splat` 파일을 드래그 앤 드롭하여 맵 로드
-2. 마우스로 카메라 위치를 원하는 곳으로 이동
-3. **P 키** 또는 📌 버튼을 눌러 웨이포인트 추가
-4. 여러 위치에서 반복 (최소 2개 필요)
-5. **Start Recording** 버튼 클릭 → 촬영
-
-### 출력 파일
-
-```
-output/
-├── full_data.json      # 프레임별 카메라 데이터
-└── images/
-    ├── frame_0000.png
-    └── ...
-```
-
-### images_to_video.py (이미지 → 동영상 변환)
-
-```bash
-cd web_path_editor
-
-# 기본 실행
-python images_to_video.py
-
-# 옵션 지정
-python images_to_video.py -i ./output/images -o ./output/video.mp4 --fps 30
-```
-
-**옵션:**
-| 옵션 | 기본값 | 설명 |
+| 모드 | 좌클릭 | 설명 |
 |------|--------|------|
-| `-i, --input` | ./images | 이미지 폴더 경로 |
-| `-o, --output` | ./output.mp4 | 출력 동영상 경로 |
-| `--fps` | 21 | 프레임 레이트 |
-| `--pattern` | frame_*.png | 이미지 파일 패턴 |
-| `--use-opencv` | - | FFmpeg 대신 OpenCV 사용 |
-
----
-
-## web_viewer (웹 뷰어)
-
-### 실행
-
-```bash
-cd web_viewer
-python -m http.server 8080
-```
-
-브라우저에서 http://localhost:8080 접속
-
-### 파일 로드
-
-`.ply`, `.splat`, `.splatv` 파일을 브라우저 창에 드래그 앤 드롭
+| VIEW | 카메라 회전 | 일반 뷰어 모드 |
+| PLACE | 제어점 배치 | Gaussian 위치에 클릭으로 포인트 추가 |
+| SELECT | 포인트 선택/드래그 | 기존 제어점 이동 |
+| ANIMATE | 카메라 회전 | 경로 위 카메라 인디케이터 재생 |
 
 ### 조작법
 
 | 조작 | 기능 |
 |------|------|
-| 왼쪽 드래그 | 카메라 회전 (Orbit) |
-| 오른쪽 드래그 / Shift+드래그 | 카메라 이동 (Pan) |
+| 좌클릭 드래그 | 카메라 회전 (VIEW/ANIMATE) 또는 포인트 배치/선택 |
+| 우클릭 드래그 | 카메라 이동 (Pan) |
 | 마우스 휠 | 줌 인/아웃 |
-| M 키 | 현재 위치 좌표 복사 |
-| V 키 | 뷰 매트릭스 URL에 저장 |
+| `W/A/S/D` | 카메라 전후좌우 이동 |
+| `1`~`4` | 모드 전환 (VIEW/PLACE/SELECT/ANIMATE) |
+| `Delete` | 선택된 포인트 삭제 |
+| `Space` | 애니메이션 재생/정지 |
+
+### 돔 카메라 설정
+
+| 옵션 | 설명 |
+|------|------|
+| Distance | 카메라와 경로 사이 거리 |
+| Azimuth | 카메라 수평 회전 각도 (°) |
+| Elevation | 카메라 높이 각도 (°) |
+| Duration | 애니메이션/녹화 시간 (초) |
+| FPS | 초당 프레임 수 |
+
+### 경로 데이터 형식 (JSON)
+
+```json
+{
+  "controlPoints": [
+    { "id": 0, "position": [-1.32, 1.59, 2.84] },
+    { "id": 1, "position": [0.50, 1.20, 1.00] }
+  ],
+  "settings": {
+    "tension": 0.5,
+    "camDistance": 3,
+    "camAzimuth": 0,
+    "camElevation": 15,
+    "duration": 5,
+    "fps": 30
+  }
+}
+```
 
 ---
 
-## 워크플로우 예시
+## 워크플로우
 
 ```bash
-# 프로젝트 루트로 이동
-cd /path/to/pro-cv-finalproject-cv-09-main
+# 1. 배경 PLY → .splat 변환
+python convert_ply_to_splat.py background.ply -o map.splat
 
-# 1. 배경 PLY를 .splat으로 변환
-python viewer/convert_ply_to_splat.py background.ply -o viewer/map.splat
+# 2. 4DGS 모델 → .splatv 변환
+python convert_4dgs_to_splatv.py ./output/point_cloud/iteration_30000 -o model.splatv
 
-# 2. 4DGS 모델을 .splatv로 변환
-PYTHONPATH=external/4dgs python viewer/convert_4dgs_to_splatv.py \
-    --model_path output/4dgs/racoon \
-    --output viewer/model.splatv
+# 3. 배경 + 객체 병합
+python merge_splat_files.py map.splat model.splatv -o merged.splatv
 
-# 3. 배경과 객체 병합
-python viewer/merge_splat_files.py viewer/map.splat viewer/model.splatv \
-    -o viewer/merged.splatv \
-    --offset 0 1 0 \
-    --scale 0.5
-
-# 4. 웹 뷰어에서 확인
-cd viewer/web_viewer && python -m http.server 8080
-
-# 5. 카메라 경로 녹화
-cd viewer/web_path_editor && python server.py
+# 4. 경로 에디터 실행
+cd web_viewer_final && python3 -m http.server 8090
+# → .splat 드래그앤드롭 → 경로 편집 → WebM 녹화
 ```
 
 ---

@@ -1,0 +1,1200 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>4DGS Lumina Editor</title>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    :root {
+      --bg-dark: #0a0a0f;
+      --panel-bg: rgba(20, 20, 30, 0.7);
+      --glass-bg: rgba(255, 255, 255, 0.05);
+      --accent: #3b82f6;
+      --accent-hover: #60a5fa;
+      --danger: #ef4444;
+      --success: #10b981;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --border: rgba(255, 255, 255, 0.1);
+      --radius: 12px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: var(--bg-dark);
+      color: var(--text-primary);
+      font-family: 'Inter', sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #canvas {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Glassmorphism Utility */
+    .glass {
+      background: var(--panel-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      border-radius: var(--radius);
+    }
+
+    /* Top Stats & FPS */
+    #top-bar {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      z-index: 10;
+    }
+
+    .stat-tag {
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: rgba(0, 0, 0, 0.4);
+      border-radius: 20px;
+      border: 1px solid var(--border);
+    }
+
+    #progress {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 3px;
+      background: var(--accent);
+      transition: width 0.3s;
+      z-index: 100;
+    }
+
+    /* Floating Sidebar */
+    #sidebar {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 320px;
+      max-height: calc(100vh - 32px);
+      display: flex;
+      flex-direction: column;
+      z-index: 20;
+    }
+
+    .sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .sidebar-header h2 {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: var(--text-primary);
+      text-transform: uppercase;
+    }
+
+    .scroll-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .scroll-area::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .scroll-area::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 10px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Mode Buttons */
+    #mode-buttons {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+
+    .mode-btn {
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--glass-bg);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .mode-btn i {
+      width: 18px;
+      height: 18px;
+    }
+
+    .mode-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-primary);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .mode-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    }
+
+    /* Control Point List */
+    #point-list {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+
+    .point-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .point-item:last-child {
+      border-bottom: none;
+    }
+
+    .point-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .point-item.selected {
+      background: rgba(59, 130, 246, 0.15);
+      border-left: 3px solid var(--accent);
+      padding-left: 9px;
+    }
+
+    .point-item .idx {
+      font-weight: 700;
+      color: var(--accent);
+      width: 24px;
+    }
+
+    .point-item .coords {
+      flex: 1;
+      color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .point-item .del-btn {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 4px;
+    }
+
+    .point-item .del-btn:hover {
+      color: var(--danger);
+    }
+
+    /* Controls & Sliders */
+    .control-group {
+      margin-bottom: 24px;
+    }
+
+    .slider-row {
+      margin-bottom: 12px;
+    }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .slider-label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .slider-val {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      background: transparent;
+    }
+
+    input[type=range]:focus {
+      outline: none;
+    }
+
+    input[type=range]::-webkit-slider-runnable-track {
+      width: 100%;
+      height: 4px;
+      cursor: pointer;
+      background: var(--border);
+      border-radius: 2px;
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      height: 14px;
+      width: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      -webkit-appearance: none;
+      margin-top: -5px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    /* UI Feedback */
+    #message {
+      position: absolute;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      z-index: 100;
+      transition: all 0.3s;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Action Bar */
+    #action-bar {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      z-index: 30;
+    }
+
+    .icon-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--glass-bg);
+      color: var(--text-primary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .icon-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      transform: translateY(-2px);
+    }
+
+    .icon-btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .icon-btn.danger {
+      color: var(--danger);
+    }
+
+    .play-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 26px;
+    }
+
+    /* Status Hub */
+    #status-hub {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      padding: 12px 16px;
+      z-index: 10;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      }
+
+      70% {
+        transform: scale(1);
+        box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+      }
+
+      100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+
+    /* Drop Zone */
+    #drop-zone {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(59, 130, 246, 0.1);
+      border: 3px dashed var(--accent);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 700;
+      color: white;
+      transition: all 0.3s;
+    }
+
+    #spinner {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 14px;
+      color: var(--text-secondary);
+      font-weight: 500;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .loader {
+      width: 48px;
+      height: 48px;
+      border: 3px solid var(--border);
+      border-bottom-color: var(--accent);
+      border-radius: 50%;
+      animation: rotation 1s linear infinite;
+    }
+
+    @keyframes rotation {
+      0% {
+        transform: rotate(0deg);
+      }
+
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* Recording State Pulse */
+    #btn-record.recording {
+      color: #ef4444 !important;
+      background: rgba(239, 68, 68, 0.15) !important;
+      animation: pulse-red 1.5s infinite;
+    }
+
+    @keyframes pulse-red {
+      0% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+      }
+
+      70% {
+        box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+      }
+    }
+
+    #fps {
+      min-width: 80px;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="drop-zone" class="glass">
+    <div style="text-align:center;">
+      <i data-lucide="upload-cloud" style="width:64px; height:64px; margin-bottom:16px;"></i>
+      <br>Drop .splat / .splatv / .ply file here
+    </div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+  <div id="progress"></div>
+
+  <div id="top-bar">
+    <div class="stat-tag glass" id="fps">FPS: --</div>
+    <div class="stat-tag glass">Lumina Editor 1.0</div>
+  </div>
+
+  <div id="spinner">
+    <div class="loader"></div>
+    <span>Drop a .splat file to load scene</span>
+  </div>
+
+  <div id="message" class="glass"></div>
+
+  <!-- Floating Sidebar -->
+  <div id="sidebar" class="glass">
+    <div class="sidebar-header">
+      <h2>4DGS CONFIG</h2>
+      <i data-lucide="settings" style="width:16px; height:16px; color:var(--text-secondary);"></i>
+    </div>
+    <div class="scroll-area">
+      <div class="section-title"><i data-lucide="mouse-pointer-2" style="width:14px;"></i> INTERACTION MODE</div>
+      <div id="mode-buttons">
+        <button class="mode-btn active" data-mode="VIEW">
+          <i data-lucide="eye"></i> 1 View
+        </button>
+        <button class="mode-btn" data-mode="PLACE">
+          <i data-lucide="plus-circle"></i> 2 Place
+        </button>
+        <button class="mode-btn" data-mode="SELECT">
+          <i data-lucide="move"></i> 3 Select
+        </button>
+        <button class="mode-btn" data-mode="ANIMATE">
+          <i data-lucide="video"></i> 4 Animate
+        </button>
+      </div>
+
+      <div class="section-title"><i data-lucide="list" style="width:14px;"></i> CONTROL POINTS</div>
+      <div id="point-list"></div>
+
+      <div class="control-group">
+        <div class="slider-row">
+          <div class="slider-header">
+            <span class="slider-label">Path Duration</span>
+            <span class="slider-val" id="duration-val">5.0s</span>
+          </div>
+          <input type="range" id="duration-slider" min="1" max="30" step="0.5" value="5">
+        </div>
+      </div>
+
+      <div class="section-title"><i data-lucide="aperture" style="width:14px;"></i> DOME CAMERA</div>
+      <div class="control-group">
+        <div class="slider-row">
+          <div class="slider-header">
+            <span class="slider-label">Dome Radius</span>
+            <span class="slider-val" id="cam-distance-val">3.0</span>
+          </div>
+          <input type="range" id="cam-distance-slider" min="0.5" max="15" step="0.1" value="3.0">
+        </div>
+        <div class="slider-row">
+          <div class="slider-header">
+            <span class="slider-label">Azimuth Angle</span>
+            <span class="slider-val" id="cam-azimuth-val">0°</span>
+          </div>
+          <input type="range" id="cam-azimuth-slider" min="0" max="360" step="5" value="0">
+        </div>
+        <div class="slider-row">
+          <div class="slider-header">
+            <span class="slider-label">Elevation Angle</span>
+            <span class="slider-val" id="cam-elevation-val">15°</span>
+          </div>
+          <input type="range" id="cam-elevation-slider" min="-30" max="85" step="5" value="15">
+        </div>
+        <label
+          style="display:flex; align-items:center; gap:8px; font-size:11px; cursor:pointer; color:var(--text-secondary); margin-top:8px;">
+          <input type="checkbox" id="chk-show-cameras" checked style="accent-color:var(--accent);">
+          Show Frustum Viz
+        </label>
+      </div>
+
+      <div class="section-title"><i data-lucide="download" style="width:14px;"></i> EXPORT SETTINGS</div>
+      <div class="control-group">
+        <div class="slider-row">
+          <div class="slider-header">
+            <span class="slider-label">Target FPS</span>
+            <span class="slider-val" id="export-fps-val">30</span>
+          </div>
+          <input type="range" id="export-fps-slider" min="1" max="60" step="1" value="30">
+        </div>
+        <div id="export-frame-info"
+          style="font-size:10px; color:var(--text-secondary); font-family:'JetBrains Mono'; margin-top:4px;">
+          Frames: --
+        </div>
+        <button class="mode-btn primary" id="btn-export-dataset"
+          style="width:100%; margin-top:12px; flex-direction:row; padding:12px;">
+          <i data-lucide="file-json" style="width:16px;"></i> Export Training Dataset
+        </button>
+      </div>
+
+      <div class="section-title"><i data-lucide="help-circle" style="width:14px;"></i> SHORTCUTS</div>
+      <div
+        style="font-size:10px; color:var(--text-secondary); line-height:1.6; background:rgba(0,0,0,0.2); padding:10px; border-radius:8px;">
+        1-4: Switch Modes &bull; Del: Remove Point<br>
+        Space: Play/Stop &bull; Ctrl/Cmd+Z: Undo<br>
+        WASD: Move Camera
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Action Bar -->
+  <div id="action-bar" class="glass">
+    <button class="icon-btn" id="btn-save" title="Save Path JSON"><i data-lucide="save"></i></button>
+    <button class="icon-btn" id="btn-load" title="Load Path JSON"><i data-lucide="folder-open"></i></button>
+    <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+    <button class="icon-btn primary play-btn" id="btn-play" title="Play Animation"><i data-lucide="play"
+        id="play-icon"></i></button>
+    <button class="icon-btn danger" id="btn-record" title="Record WebM"><i data-lucide="circle"></i></button>
+    <div style="width:1px; height:24px; background:var(--border); margin:0 4px;"></div>
+    <button class="icon-btn danger" id="btn-clear" title="Clear All"><i data-lucide="trash-2"></i></button>
+  </div>
+
+  <div id="status-hub">
+    <div class="status-pill glass" id="status-mode-pill">
+      <div class="pulse"></div>
+      <span id="status-mode">VIEW</span>
+    </div>
+    <div class="status-pill glass" style="margin-top:8px; display:block; min-width:180px;">
+      <span id="status-info">Ready to load</span>
+    </div>
+  </div>
+
+  <input type="file" id="file-input" accept=".json" style="display:none">
+
+  <script src="bezier-math.js"></script>
+  <script src="overlay-renderer.js"></script>
+  <script src="hybrid.js"></script>
+  <script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    // ========== Bezier Path Editor Logic ==========
+
+    function extractMapUp(dvm) {
+      const right = [dvm[0], dvm[4], dvm[8]];
+      const up = [dvm[1], dvm[5], dvm[9]];
+      const back = [dvm[2], dvm[6], dvm[10]];
+      const uLen = Math.sqrt(up[0] ** 2 + up[1] ** 2 + up[2] ** 2);
+      const u = [up[0] / uLen, up[1] / uLen, up[2] / uLen];
+      const rDotU = right[0] * u[0] + right[1] * u[1] + right[2] * u[2];
+      const r = [right[0] - rDotU * u[0], right[1] - rDotU * u[1], right[2] - rDotU * u[2]];
+      const rLen = Math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2);
+      const rn = [r[0] / rLen, r[1] / rLen, r[2] / rLen];
+      const b = [rn[1] * u[2] - rn[2] * u[1], rn[2] * u[0] - rn[0] * u[2], rn[0] * u[1] - rn[1] * u[0]];
+      return { mapUp: u, mapRight: rn, mapBack: b };
+    }
+
+    const _dvm = window.defaultViewMatrix || [-0.97, 0.13, 0.22, 0, 0.04, 0.91, -0.41, 0, -0.25, -0.39, -0.89, 0, -1.32, 1.59, 2.84, 1];
+    const { mapUp: _camDown, mapRight: _initRight, mapBack: _initBack } = extractMapUp(_dvm);
+
+    let mapUp = [-_camDown[0], -_camDown[1], -_camDown[2]];
+    let mapRight = [_initRight[0], _initRight[1], _initRight[2]];
+    let mapBack = [_initBack[0], _initBack[1], _initBack[2]];
+
+    function computeGroundUp(points) {
+      if (points.length < 3) return null;
+      const p0 = points[0].position, p1 = points[1].position, p2 = points[2].position;
+      const v1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+      const v2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+      const n = [v1[1] * v2[2] - v1[2] * v2[1], v1[2] * v2[0] - v1[0] * v2[2], v1[0] * v2[1] - v1[1] * v2[0]];
+      const len = Math.sqrt(n[0] ** 2 + n[1] ** 2 + n[2] ** 2);
+      if (len < 1e-8) return null;
+      const norm = [n[0] / len, n[1] / len, n[2] / len];
+      const R = [[_dvm[0], _dvm[4], _dvm[8]], [_dvm[1], _dvm[5], _dvm[9]], [_dvm[2], _dvm[6], _dvm[10]]];
+      const t = [_dvm[12], _dvm[13], _dvm[14]];
+      const camPos = [-(R[0][0] * t[0] + R[0][1] * t[1] + R[0][2] * t[2]), -(R[1][0] * t[0] + R[1][1] * t[1] + R[1][2] * t[2]), -(R[2][0] * t[0] + R[2][1] * t[1] + R[2][2] * t[2])];
+      const mid = [points.reduce((s, p) => s + p.position[0], 0) / points.length, points.reduce((s, p) => s + p.position[1], 0) / points.length, points.reduce((s, p) => s + p.position[2], 0) / points.length];
+      const dotCam = norm[0] * (camPos[0] - mid[0]) + norm[1] * (camPos[1] - mid[1]) + norm[2] * (camPos[2] - mid[2]);
+      return dotCam >= 0 ? norm : [-norm[0], -norm[1], -norm[2]];
+    }
+
+    function updateGroundAxes(points) {
+      const up = computeGroundUp(points);
+      if (!up) return;
+      mapUp = up;
+      const p0 = points[0].position, p1 = points[1].position;
+      const edge = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+      const edgeDot = edge[0] * up[0] + edge[1] * up[1] + edge[2] * up[2];
+      const fwd = [edge[0] - edgeDot * up[0], edge[1] - edgeDot * up[1], edge[2] - edgeDot * up[2]];
+      const fLen = Math.sqrt(fwd[0] ** 2 + fwd[1] ** 2 + fwd[2] ** 2);
+      if (fLen > 1e-8) {
+        mapBack = [-fwd[0] / fLen, -fwd[1] / fLen, -fwd[2] / fLen];
+        mapRight = [up[1] * mapBack[2] - up[2] * mapBack[1], up[2] * mapBack[0] - up[0] * mapBack[2], up[0] * mapBack[1] - up[1] * mapBack[0]];
+      }
+    }
+
+    const Editor = {
+      mode: 'VIEW',
+      controlPoints: [],
+      selectedIdx: -1,
+      nextId: 0,
+      duration: 5.0,
+      segments: [],
+      undoStack: [],
+      animating: false,
+      animStartTime: 0,
+      draggingPoint: false,
+      savedViewMatrix: null,
+      camDistance: 3.0,
+      camAzimuth: 0,
+      camElevation: 15,
+      showCameras: true,
+      _recorder: null,
+      _recordedChunks: [],
+      recording: false,
+      exportFps: 30,
+      _origWidth: 0,
+      _origHeight: 0,
+
+      init() {
+        window.editorMode = this.mode;
+        this.bindUI();
+        this.bindEditorCallbacks();
+        const checkGL = setInterval(() => {
+          if (window.gl) {
+            clearInterval(checkGL);
+            OverlayRenderer.init(window.gl);
+          }
+        }, 100);
+      },
+
+      bindUI() {
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+          btn.addEventListener('click', () => this.setMode(btn.dataset.mode));
+        });
+        document.getElementById('duration-slider').addEventListener('input', (e) => {
+          this.duration = parseFloat(e.target.value);
+          document.getElementById('duration-val').textContent = this.duration.toFixed(1) + 's';
+          this.updateExportInfo();
+        });
+        document.getElementById('cam-distance-slider').addEventListener('input', (e) => {
+          this.camDistance = parseFloat(e.target.value);
+          document.getElementById('cam-distance-val').textContent = this.camDistance.toFixed(1);
+          this.generateCameraFrustums();
+        });
+        document.getElementById('cam-azimuth-slider').addEventListener('input', (e) => {
+          this.camAzimuth = parseFloat(e.target.value);
+          document.getElementById('cam-azimuth-val').textContent = this.camAzimuth + '°';
+          this.generateCameraFrustums();
+        });
+        document.getElementById('cam-elevation-slider').addEventListener('input', (e) => {
+          this.camElevation = parseFloat(e.target.value);
+          document.getElementById('cam-elevation-val').textContent = this.camElevation + '°';
+          this.generateCameraFrustums();
+        });
+        document.getElementById('chk-show-cameras').addEventListener('change', (e) => {
+          this.showCameras = e.target.checked;
+          this.generateCameraFrustums();
+        });
+        document.getElementById('btn-play').addEventListener('click', () => this.toggleAnimation());
+        document.getElementById('btn-save').addEventListener('click', () => this.savePath());
+        document.getElementById('btn-load').addEventListener('click', () => document.getElementById('file-input').click());
+        document.getElementById('btn-clear').addEventListener('click', () => this.clearAll());
+        document.getElementById('file-input').addEventListener('change', (e) => {
+          if (e.target.files[0]) this.loadPath(e.target.files[0]);
+          e.target.value = '';
+        });
+        document.getElementById('export-fps-slider').addEventListener('input', (e) => {
+          this.exportFps = parseInt(e.target.value);
+          document.getElementById('export-fps-val').textContent = this.exportFps;
+          this.updateExportInfo();
+        });
+        document.getElementById('btn-export-dataset').addEventListener('click', () => this.exportDataset());
+        document.getElementById('btn-record').addEventListener('click', () => this.toggleRecording());
+
+        window.addEventListener('keydown', (e) => {
+          if (e.target.tagName === 'INPUT') return;
+          if (e.key === '1') this.setMode('VIEW');
+          else if (e.key === '2') this.setMode('PLACE');
+          else if (e.key === '3') this.setMode('SELECT');
+          else if (e.key === '4') this.setMode('ANIMATE');
+          else if (e.key === 'Delete' || e.key === 'Backspace') this.deleteSelected();
+          else if (e.code === 'Space') { e.preventDefault(); this.toggleAnimation(); }
+          else if ((e.ctrlKey || e.metaKey) && e.key === 'z') this.undo();
+        });
+      },
+
+      bindEditorCallbacks() {
+        window.onEditorClick = (mx, my, mode) => {
+          if (mode === 'PLACE') this.placePoint(mx, my);
+          else if (mode === 'SELECT') this.selectPoint(mx, my);
+        };
+        let lastDragTime = 0;
+        window.onEditorDrag = (mx, my) => {
+          if (this.mode === 'SELECT' && this.selectedIdx >= 0 && this.draggingPoint) {
+            if (performance.now() - lastDragTime < 33) return;
+            lastDragTime = performance.now();
+            this.dragPoint(mx, my);
+          }
+        };
+        window.onEditorDragEnd = () => { this.draggingPoint = false; };
+      },
+
+      setMode(mode) {
+        this.mode = mode;
+        window.editorMode = mode;
+        if (mode !== 'ANIMATE') this.stopAnimation();
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.mode === mode);
+        });
+        document.getElementById('status-mode').textContent = mode;
+        this.updateStatusInfo();
+      },
+
+      pickGaussian(mouseX, mouseY) {
+        const posArr = window.gaussianPositions;
+        if (!posArr || !window.projectionMatrix || !window.viewMatrix) return null;
+        const vp = multiply4(window.projectionMatrix, window.viewMatrix);
+        const w = window.innerWidth, h = window.innerHeight;
+        let minDist = Infinity, bestPos = null;
+        for (let i = 0; i < posArr.length / 3; i++) {
+          const x = posArr[3 * i], y = posArr[3 * i + 1], z = posArr[3 * i + 2];
+          const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12], cy = vp[1] * x + vp[5] * y + vp[9] * z + vp[13], cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+          if (cw <= 0) continue;
+          const d = ((cx / cw + 1) * 0.5 * w - mouseX) ** 2 + ((1 - cy / cw) * 0.5 * h - mouseY) ** 2;
+          if (d < minDist) { minDist = d; bestPos = [x, y, z]; }
+        }
+        return minDist < 50 * 50 ? bestPos : null;
+      },
+
+      pickAtCenter() {
+        const pos = this.pickGaussian(window.innerWidth / 2, window.innerHeight / 2);
+        if (pos) {
+          this.pushUndo();
+          this.controlPoints.push({ id: this.nextId++, position: [...pos] });
+          this.rebuildPath();
+          this.showMessage('Point added at focus');
+        }
+      },
+
+      placePoint(mx, my) {
+        const pos = this.pickGaussian(mx, my);
+        if (!pos) return;
+        this.pushUndo();
+        this.controlPoints.push({ id: this.nextId++, position: [...pos] });
+        this.selectedIdx = this.controlPoints.length - 1;
+        this.rebuildPath();
+      },
+
+      selectPoint(mx, my) {
+        if (this.controlPoints.length === 0) return;
+        const vp = multiply4(window.projectionMatrix, window.viewMatrix);
+        const w = window.innerWidth, h = window.innerHeight;
+        let minDist = Infinity, bestIdx = -1;
+        for (let i = 0; i < this.controlPoints.length; i++) {
+          const p = this.controlPoints[i].position;
+          const cx = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], cy = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], cw = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+          if (cw <= 0) continue;
+          const d = ((cx / cw + 1) * 0.5 * w - mx) ** 2 + ((1 - cy / cw) * 0.5 * h - my) ** 2;
+          if (d < minDist) { minDist = d; bestIdx = i; }
+        }
+        if (minDist < 30 * 30) {
+          this.selectedIdx = bestIdx;
+          this.draggingPoint = true;
+          this.pushUndo();
+        } else this.selectedIdx = -1;
+        this.updatePointList();
+        this.updateOverlay();
+      },
+
+      dragPoint(mx, my) {
+        if (this.selectedIdx < 0) return;
+        const pos = this.pickGaussian(mx, my);
+        if (pos) {
+          this.controlPoints[this.selectedIdx].position = [...pos];
+          this.rebuildPath();
+        }
+      },
+
+      deleteSelected() {
+        if (this.selectedIdx < 0) return;
+        this.pushUndo();
+        this.controlPoints.splice(this.selectedIdx, 1);
+        this.selectedIdx = Math.min(this.selectedIdx, this.controlPoints.length - 1);
+        this.rebuildPath();
+        this.showMessage('Point removed');
+      },
+
+      clearAll() {
+        if (this.controlPoints.length === 0) return;
+        this.pushUndo();
+        this.controlPoints = [];
+        this.selectedIdx = -1;
+        this.rebuildPath();
+        this.showMessage('Canvas cleared');
+      },
+
+      rebuildPath() {
+        if (this.controlPoints.length >= 3) updateGroundAxes(this.controlPoints);
+        this.segments = BezierMath.buildNaturalSplinePath(this.controlPoints.map(p => p.position));
+        this.updateOverlay();
+        this.generateCameraFrustums();
+        this.updatePointList();
+        this.updateStatusInfo();
+        this.updateExportInfo();
+      },
+
+      getHorizontalTangent(t) {
+        const dt = 0.005;
+        const a = BezierMath.evaluatePathAt(this.segments, Math.max(0, t - dt));
+        const b = BezierMath.evaluatePathAt(this.segments, Math.min(1, t + dt));
+        if (!a || !b) return [-mapBack[0], -mapBack[1], -mapBack[2]];
+        const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+        const dot = dx * mapUp[0] + dy * mapUp[1] + dz * mapUp[2];
+        const h = [dx - dot * mapUp[0], dy - dot * mapUp[1], dz - dot * mapUp[2]];
+        const len = Math.sqrt(h[0] ** 2 + h[1] ** 2 + h[2] ** 2);
+        return len < 1e-8 ? [-mapBack[0], -mapBack[1], -mapBack[2]] : [h[0] / len, h[1] / len, h[2] / len];
+      },
+
+      updateOverlay() {
+        if (!window.OverlayRenderer?.gl) return;
+        if (this.segments.length > 0) {
+          const { positions, count } = BezierMath.sampleBezierPath(this.segments, 48);
+          OverlayRenderer.updateLines(positions, count);
+        } else OverlayRenderer.updateLines(new Float32Array(0), 0);
+        const n = this.controlPoints.length;
+        if (n > 0) {
+          const pos = new Float32Array(n * 3), col = new Float32Array(n * 4);
+          for (let i = 0; i < n; i++) {
+            pos[3 * i] = this.controlPoints[i].position[0]; pos[3 * i + 1] = this.controlPoints[i].position[1]; pos[3 * i + 2] = this.controlPoints[i].position[2];
+            if (i === this.selectedIdx) { col[4 * i] = 0.23; col[4 * i + 1] = 0.51; col[4 * i + 2] = 0.96; col[4 * i + 3] = 1; }
+            else { col[4 * i] = 1; col[4 * i + 1] = 1; col[4 * i + 2] = 1; col[4 * i + 3] = 0.8; }
+          }
+          OverlayRenderer.updatePoints(pos, col, n);
+        } else OverlayRenderer.updatePoints(new Float32Array(0), new Float32Array(0), 0);
+      },
+
+      generateCameraFrustums(num = 12) {
+        if (!window.OverlayRenderer?.gl || !this.showCameras || this.segments.length === 0) {
+          OverlayRenderer.updateCameraLines(new Float32Array(0), 0);
+          return;
+        }
+        const v = [];
+        const d = 0.2, hw = 0.12, hh = 0.08;
+        for (let c = 0; c < num; c++) {
+          const t = num > 1 ? c / (num - 1) : 0;
+          const pos = BezierMath.evaluatePathAt(this.segments, t);
+          if (!pos) continue;
+          const { eye } = this.getDomeCameraEye(pos, t);
+          const vm = this.lookAt(eye, pos, mapUp);
+          if (!vm) continue;
+          const c2w = invert4(vm);
+          const r = [c2w[0], c2w[1], c2w[2]], dw = [c2w[4], c2w[5], c2w[6]], f = [c2w[8], c2w[9], c2w[10]], e = [c2w[12], c2w[13], c2w[14]];
+          const cx = e[0] + f[0] * d, cy = e[1] + f[1] * d, cz = e[2] + f[2] * d;
+          const tl = [cx - r[0] * hw - dw[0] * hh, cy - r[1] * hw - dw[1] * hh, cz - r[2] * hw - dw[2] * hh];
+          const tr = [cx + r[0] * hw - dw[0] * hh, cy + r[1] * hw - dw[1] * hh, cz + r[2] * hw - dw[2] * hh];
+          const bl = [cx - r[0] * hw + dw[0] * hh, cy - r[1] * hw + dw[1] * hh, cz - r[2] * hw + dw[2] * hh];
+          const br = [cx + r[0] * hw + dw[0] * hh, cy + r[1] * hw + dw[1] * hh, cz + r[2] * hw + dw[2] * hh];
+          v.push(...e, ...tl, ...e, ...tr, ...e, ...bl, ...e, ...br, ...tl, ...tr, ...tr, ...br, ...br, ...bl, ...bl, ...tl);
+        }
+        OverlayRenderer.updateCameraLines(new Float32Array(v), v.length / 3);
+      },
+
+      toggleAnimation() { this.animating ? this.stopAnimation() : this.startAnimation(); },
+      startAnimation() {
+        if (this.segments.length === 0) return;
+        this.savedViewMatrix = window.viewMatrix ? [...window.viewMatrix] : null;
+        this.animating = true;
+        window.editorAnimating = true;
+        this.animStartTime = performance.now();
+        this.setMode('ANIMATE');
+        document.getElementById('play-icon').setAttribute('data-lucide', 'square');
+        lucide.createIcons();
+        this.animLoop();
+      },
+      stopAnimation() {
+        this.animating = false;
+        window.editorAnimating = false;
+        OverlayRenderer.animIndicatorPos = null;
+        document.getElementById('play-icon').setAttribute('data-lucide', 'play');
+        lucide.createIcons();
+        if (this.savedViewMatrix && window.setViewMatrix) window.setViewMatrix(this.savedViewMatrix);
+        this.savedViewMatrix = null;
+      },
+
+      lookAt(eye, target, up) {
+        const f = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+        const fl = Math.sqrt(f[0] ** 2 + f[1] ** 2 + f[2] ** 2);
+        if (fl < 1e-8) return null;
+        f[0] /= fl; f[1] /= fl; f[2] /= fl;
+        const r = [f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]];
+        const rl = Math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2);
+        if (rl < 1e-8) return null;
+        r[0] /= rl; r[1] /= rl; r[2] /= rl;
+        const dw = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+        return [r[0], dw[0], f[0], 0, r[1], dw[1], f[1], 0, r[2], dw[2], f[2], 0, -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]), -(dw[0] * eye[0] + dw[1] * eye[1] + dw[2] * eye[2]), -(f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2]), 1];
+      },
+
+      getDomeCameraEye(pos, t) {
+        const az = this.camAzimuth * Math.PI / 180, el = this.camElevation * Math.PI / 180, dist = this.camDistance, hFwd = this.getHorizontalTangent(t);
+        const rx = hFwd[1] * mapUp[2] - hFwd[2] * mapUp[1], ry = hFwd[2] * mapUp[0] - hFwd[0] * mapUp[2], rz = hFwd[0] * mapUp[1] - hFwd[1] * mapUp[0];
+        const rl = Math.sqrt(rx ** 2 + ry ** 2 + rz ** 2);
+        const hR = rl > 1e-8 ? [rx / rl, ry / rl, rz / rl] : [mapRight[0], mapRight[1], mapRight[2]];
+        const ce = Math.cos(el), se = Math.sin(el), ca = Math.cos(az), sa = Math.sin(az);
+        return { eye: [pos[0] + dist * (ce * sa * hR[0] + se * mapUp[0] + ce * ca * hFwd[0]), pos[1] + dist * (ce * sa * hR[1] + se * mapUp[1] + ce * ca * hFwd[1]), pos[2] + dist * (ce * sa * hR[2] + se * mapUp[2] + ce * ca * hFwd[2])] };
+      },
+
+      animLoop() {
+        if (!this.animating) return;
+        const t = Math.min((performance.now() - this.animStartTime) / 1000 / this.duration, 1);
+        const pos = BezierMath.evaluatePathAt(this.segments, t);
+        if (pos) {
+          OverlayRenderer.animIndicatorPos = pos;
+          const { eye } = this.getDomeCameraEye(pos, t);
+          const vm = this.lookAt(eye, pos, mapUp);
+          if (vm && window.setViewMatrix) window.setViewMatrix(vm);
+        }
+        if (t >= 1) {
+          if (this.recording) { this.stopRecording(); this.stopAnimation(); return; }
+          this.animStartTime = performance.now();
+        }
+        requestAnimationFrame(() => this.animLoop());
+      },
+
+      toggleRecording() { this.recording ? (this.stopRecording(), this.stopAnimation()) : this.startRecording(); },
+      startRecording() {
+        if (this.segments.length === 0) return;
+        const canvas = document.querySelector('canvas');
+
+        // Save original size and switch to Pro resolution (1024px)
+        this._origWidth = window.innerWidth;
+        this._origHeight = window.innerHeight;
+
+        const targetSize = 1024;
+        const ratio = this._origWidth / this._origHeight;
+        let newW, newH;
+        if (ratio > 1) { newW = targetSize; newH = Math.round(targetSize / ratio); }
+        else { newH = targetSize; newW = Math.round(targetSize * ratio); }
+
+        // Update canvas for high-quality capture
+        canvas.style.width = newW + 'px';
+        canvas.style.height = newH + 'px';
+
+        // Manually trigger resize event for WebGL re-init
+        // We temporarily override innerWidth/innerHeight for the resize handler
+        const originalInnerWidth = window.innerWidth;
+        const originalInnerHeight = window.innerHeight;
+
+        // Use Object.defineProperty to trick the resize logic
+        Object.defineProperty(window, 'innerWidth', { value: newW, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: newH, configurable: true });
+
+        window.dispatchEvent(new Event('resize'));
+
+        OverlayRenderer.hideOverlay = true;
+        const stream = canvas.captureStream(this.exportFps);
+        const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm;codecs=vp8';
+        this._recordedChunks = [];
+        this._recorder = new MediaRecorder(stream, {
+          mimeType: mime,
+          videoBitsPerSecond: 50_000_000 // High-quality 50Mbps
+        });
+
+        this._recorder.ondataavailable = (e) => { if (e.data.size > 0) this._recordedChunks.push(e.data); };
+        this._recorder.onstop = () => {
+          const blob = new Blob(this._recordedChunks, { type: mime });
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `4dgs_pro_${Date.now()}.webm`; a.click();
+          this._recordedChunks = [];
+
+          // Restore original size
+          Object.defineProperty(window, 'innerWidth', { value: originalInnerWidth, configurable: true });
+          Object.defineProperty(window, 'innerHeight', { value: originalInnerHeight, configurable: true });
+          canvas.style.width = '';
+          canvas.style.height = '';
+          window.dispatchEvent(new Event('resize'));
+        };
+
+        this._recorder.start();
+        this.recording = true;
+        document.getElementById('btn-record').classList.add('recording');
+
+        this.showMessage('Cinematic Recording Started (1024px Pro)');
+
+        if (!this.animating) this.startAnimation();
+        else this.animStartTime = performance.now();
+      },
+      stopRecording() {
+        if (!this._recorder || this._recorder.state === 'inactive') return;
+        this._recorder.stop();
+        this.recording = false;
+        OverlayRenderer.hideOverlay = false;
+        document.getElementById('btn-record').classList.remove('recording');
+      },
+
+      pushUndo() {
+        this.undoStack.push(JSON.stringify(this.controlPoints));
+        if (this.undoStack.length > 50) this.undoStack.shift();
+      },
+      undo() {
+        if (this.undoStack.length === 0) return;
+        this.controlPoints = JSON.parse(this.undoStack.pop());
+        this.rebuildPath();
+        this.showMessage('Reverted change');
+      },
+
+      savePath() {
+        const data = { version: '1.0', type: 'bezier_object_path', settings: { duration: this.duration, camDistance: this.camDistance, camAzimuth: this.camAzimuth, camElevation: this.camElevation }, controlPoints: this.controlPoints };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lumina_path.json'; a.click();
+      },
+      loadPath(file) {
+        const fr = new FileReader();
+        fr.onload = () => {
+          try {
+            const data = JSON.parse(fr.result);
+            if (data.type !== 'bezier_object_path') throw new Error('Format mismatch');
+            this.pushUndo();
+            this.controlPoints = data.controlPoints;
+            this.nextId = Math.max(...this.controlPoints.map(p => p.id), 0) + 1;
+            this.syncUI_data(data.settings);
+            this.rebuildPath();
+            this.showMessage('Imported configuration');
+          } catch (e) { this.showMessage('Load error'); }
+        };
+        fr.readAsText(file);
+      },
+      syncUI_data(s) {
+        if (!s) return;
+        this.duration = s.duration ?? 5.0; this.camDistance = s.camDistance ?? 3.0; this.camAzimuth = s.camAzimuth ?? 0; this.camElevation = s.camElevation ?? 15;
+        document.getElementById('duration-slider').value = this.duration; document.getElementById('duration-val').textContent = this.duration.toFixed(1) + 's';
+        document.getElementById('cam-distance-slider').value = this.camDistance; document.getElementById('cam-distance-val').textContent = this.camDistance.toFixed(1);
+        document.getElementById('cam-azimuth-slider').value = this.camAzimuth; document.getElementById('cam-azimuth-val').textContent = this.camAzimuth + '°';
+        document.getElementById('cam-elevation-slider').value = this.camElevation; document.getElementById('cam-elevation-val').textContent = this.camElevation + '°';
+      },
+
+      exportDataset() {
+        if (this.segments.length === 0) return;
+        const fps = this.exportFps, total = Math.round(this.duration * fps), canvas = document.querySelector('canvas'), w = canvas?.width || 1920, h = canvas?.height || 1080, pm = window.projectionMatrix;
+        const fl_x = pm ? (pm[0] * w) / 2 : w, fl_y = pm ? (-pm[5] * h) / 2 : h;
+        const frames = [];
+        for (let i = 0; i < total; i++) {
+          const t = total > 1 ? i / (total - 1) : 0, pos = BezierMath.evaluatePathAt(this.segments, t);
+          if (!pos) continue;
+          const { eye } = this.getDomeCameraEye(pos, t), vm = this.lookAt(eye, pos, mapUp);
+          if (vm) {
+            const c2w = invert4(vm);
+            frames.push({ file_path: `./images/frame_${String(i).padStart(5, '0')}`, time: i / fps, time_normalized: t, transform_matrix: [[c2w[0], c2w[4], c2w[8], c2w[12]], [c2w[1], c2w[5], c2w[9], c2w[13]], [c2w[2], c2w[6], c2w[10], c2w[14]], [c2w[3], c2w[7], c2w[11], c2w[15]]] });
+          }
+        }
+        const output = { camera_angle_x: pm ? 2 * Math.atan(w / (2 * fl_x)) : 0.7, camera_angle_y: pm ? 2 * Math.atan(h / (2 * fl_y)) : 0.7, fl_x, fl_y, cx: w / 2, cy: h / 2, w, h, duration: this.duration, fps, frames };
+        const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'transforms_train.json'; a.click();
+      },
+
+      updatePointList() {
+        const list = document.getElementById('point-list');
+        list.innerHTML = '';
+        this.controlPoints.forEach((pt, i) => {
+          const div = document.createElement('div');
+          div.className = 'point-item' + (i === this.selectedIdx ? ' selected' : '');
+          div.innerHTML = `<span class="idx">${i + 1}</span><span class="coords">(${pt.position[0].toFixed(2)}, ${pt.position[1].toFixed(2)}, ${pt.position[2].toFixed(2)})</span><button class="del-btn"><i data-lucide="x" style="width:12px;height:12px;"></i></button>`;
+          div.addEventListener('click', (e) => {
+            if (e.target.closest('.del-btn')) { this.selectedIdx = i; this.deleteSelected(); }
+            else { this.selectedIdx = i; this.updatePointList(); this.updateOverlay(); }
+          });
+          list.appendChild(div);
+        });
+        lucide.createIcons();
+      },
+
+      updateStatusInfo() {
+        const n = this.controlPoints.length;
+        let text = `${n} Keypoint${n !== 1 ? 's' : ''}`;
+        if (this.segments.length > 0) text += ` | Len: ${BezierMath.arcLength(this.segments).toFixed(2)}`;
+        if (window.gaussianCount) text += ` | ${window.gaussianCount.toLocaleString()} Gaussians`;
+        document.getElementById('status-info').textContent = text;
+        const fpsEl = document.getElementById('fps');
+        if (window.fpsVal) fpsEl.textContent = `FPS: ${window.fpsVal}`;
+      },
+
+      updateExportInfo() {
+        document.getElementById('export-frame-info').textContent = `Total Frames: ${Math.round(this.duration * this.exportFps)} (${this.duration.toFixed(1)}s @ ${this.exportFps}fps)`;
+      },
+
+      showMessage(msg) {
+        const el = document.getElementById('message');
+        el.textContent = msg; el.style.opacity = '1';
+        clearTimeout(this._msgTimeout);
+        this._msgTimeout = setTimeout(() => el.style.opacity = '0', 2500);
+      }
+    };
+
+    Editor.init();
+    setInterval(() => Editor.updateStatusInfo(), 2000);
+  </script>
+</body>
+
+</html>

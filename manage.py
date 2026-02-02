@@ -90,6 +90,19 @@ Examples:
     parser_unity.add_argument("--no-midas", action="store_true",
                               help="Disable MiDaS depth estimation (use uniform depth instead)")
 
+    # Command: process-viewer (Web viewer output → 4DGS dataset)
+    parser_viewer = subparsers.add_parser("process-viewer",
+        help="[CORE] Web viewer video + transforms_train.json → 4DGS dataset")
+    parser_viewer.add_argument("video", help="Video from viewer (WebM, MP4)")
+    parser_viewer.add_argument("transforms", help="transforms_train.json from viewer")
+    parser_viewer.add_argument("--output", required=True, help="Output dataset name (e.g., my_scene)")
+    parser_viewer.add_argument("--resize", type=str, default=None,
+                               help="Resize images: scale (e.g., 0.5) or WxH (e.g., 384x216)")
+    parser_viewer.add_argument("--frames", type=int, default=None,
+                               help="Limit number of frames (uniformly sampled, includes first and last)")
+    parser_viewer.add_argument("--remove-bg", action="store_true",
+                               help="Remove background using BiRefNet")
+
     # Command: train
     parser_train = subparsers.add_parser("train", parents=[parent_parser],
                                          help="Train 4DGS on prepared dataset")
@@ -255,6 +268,33 @@ Examples:
             print(f"  2. Render: CAMERA_ANGLE_OFFSET=45 python external/4dgs/render.py -m output/4dgs/{args.output} --skip_train --skip_test")
         else:
             print("[Error] Unity data processing failed.")
+            sys.exit(1)
+
+    elif args.command == "process-viewer":
+        from src.process_viewer import process_viewer_output
+
+        project_dir = os.path.join(data_root, args.output)
+
+        # Parse resize
+        resize = None
+        if args.resize:
+            if 'x' in args.resize.lower():
+                w, h = args.resize.lower().split('x')
+                resize = (int(w), int(h))
+            else:
+                resize = float(args.resize)
+
+        result = process_viewer_output(
+            args.video,
+            args.transforms,
+            project_dir,
+            max_frames=args.frames,
+            resize=resize,
+            remove_bg=args.remove_bg
+        )
+
+        if not result:
+            print("[Error] Viewer data processing failed.")
             sys.exit(1)
 
     elif args.command == "train":

@@ -64,6 +64,11 @@ tensorboard/
 # Rerun recordings (can be large)
 *.rrd
 
+# 3DGS binary assets (large files)
+*.splat
+*.splatv
+*.ply
+
 # Claude Code (local only)
 .claude/
 
