@@ -272,7 +272,7 @@ Examples:
         clean_ply_model(args.ply_path, output, nb_neighbors=args.neighbors)
 
     elif args.command == "remove-bg":
-        from src.background_remover import process_video
+        from src.adapters.background_remover import process_video
 
         # Parse resize
         resize = None
@@ -302,7 +302,7 @@ Examples:
         print(f"  2. Train: python manage.py train {output_dir} --extra=\"--white_background\"")
 
     elif args.command == "prepare-alpha":
-        from src.background_remover import process_video
+        from src.adapters.background_remover import process_video
         from src.create_sparse_from_images import create_colmap_sparse
 
         # Parse resize
@@ -351,11 +351,11 @@ Examples:
         print(f"\n[Done] Sparse files created. Ready for training!")
 
     elif args.command == "visualize":
-        from src.rerun_vis import run_visualization
+        from src.adapters.rerun_vis import run_visualization
         run_visualization(args.dir, watch=args.watch, web=args.web, save_path=args.save)
 
     elif args.command == "trajectory":
-        from src.visualize_trajectory import load_gaussian_model, compute_trajectories, compute_movement_stats, save_trajectories_ply, visualize_with_rerun
+        from src.adapters.visualize_trajectory import load_gaussian_model, compute_trajectories, compute_movement_stats, save_trajectories_ply, visualize_with_rerun
         try:
             gaussians, deform, iteration = load_gaussian_model(args.model_path)
             trajectories, times, indices = compute_trajectories(

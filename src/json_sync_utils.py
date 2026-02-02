@@ -126,7 +126,7 @@ def sync_video_with_json(video_path, json_path, original_video_path, output_dir,
     if remove_bg:
         print(f"[JSON-Sync] Background removal enabled, loading BiRefNet...")
         try:
-            from src.background_remover import BiRefNetRemover
+            from src.adapters.background_remover import BiRefNetRemover
             bg_remover = BiRefNetRemover()
         except ImportError as e:
             print(f"[Error] Failed to load BiRefNet: {e}")
@@ -459,7 +459,7 @@ def write_colmap_text(frames, output_dir, img_dir=None, map_transform=None):
             depth_estimator = None
             if use_midas:
                 try:
-                    from depth_estimator import DepthEstimator
+                    from src.adapters.depth_estimator import DepthEstimator
                     depth_estimator = DepthEstimator("MiDaS_small")
                     print(f"[COLMAP] Using MiDaS for depth estimation (better point quality)")
                 except Exception as e:
