@@ -311,10 +311,12 @@ python manage.py visualize output/4dgs/black_cat/point_cloud --web
 │   │   ├── frame_extractor.py     # 비디오 프레임 추출 + JSON 동기화
 │   │   ├── coordinate.py          # Unity ↔ NeRF 좌표계 변환
 │   │   ├── colmap_writer.py       # COLMAP sparse 포맷 생성
-│   │   └── nerf_writer.py         # transforms_train.json 생성
-│   ├── adapters/              # 외부 모델 래퍼 (선택적)
+│   │   ├── nerf_writer.py         # transforms_train.json 생성
+│   │   └── sparse_from_images.py  # 이미지 → COLMAP sparse (Unity 없이)
+│   ├── adapters/              # 외부 모델/도구 래퍼
 │   │   ├── background_remover.py  # BiRefNet 배경 제거
 │   │   ├── depth_estimator.py     # MiDaS 깊이 추정
+│   │   ├── camera_transform.py    # 렌더링용 카메라 변환
 │   │   ├── rerun_vis.py           # Rerun 시각화
 │   │   └── visualize_trajectory.py # Gaussian 궤적 시각화
 │   ├── patches_4dgs/          # 4DGS 패치 (setup 시 적용)
@@ -322,6 +324,9 @@ python manage.py visualize output/4dgs/black_cat/point_cloud --web
 │   │   ├── sfm_free.py        # SfM-free 동작 패치
 │   │   ├── open3d.py          # open3d 의존성 제거 패치
 │   │   └── camera_offset.py   # 카메라 회전 패치
+│   ├── utils/                 # 유틸리티
+│   │   ├── filter.py          # PLY floater 제거
+│   │   └── exporter.py        # PLY → splat 변환
 │   ├── runner.py              # 학습/렌더링 실행기
 │   ├── setup.py               # 환경 설정 매니저
 │   ├── dataset.py             # 데이터셋 매니저

@@ -268,7 +268,7 @@ Examples:
         Runner(global_config, model_config).train(args.scene_path, extra_args)
 
     elif args.command == "clean-model":
-        from src.filter_utils import clean_ply_model
+        from src.utils.filter import clean_ply_model
         output = args.output if args.output else args.ply_path.replace(".ply", "_cleaned.ply")
         clean_ply_model(args.ply_path, output, nb_neighbors=args.neighbors)
 
@@ -304,7 +304,7 @@ Examples:
 
     elif args.command == "prepare-alpha":
         from src.adapters.background_remover import process_video
-        from src.create_sparse_from_images import create_colmap_sparse
+        from src.converters.sparse_from_images import create_colmap_sparse
 
         # Parse resize
         resize = None
@@ -347,7 +347,7 @@ Examples:
         print(f"  python manage.py train data/{args.output} --extra=\"--white_background\"")
 
     elif args.command == "create-sparse":
-        from src.create_sparse_from_images import create_colmap_sparse
+        from src.converters.sparse_from_images import create_colmap_sparse
         create_colmap_sparse(args.images_dir, fov=args.fov)
         print(f"\n[Done] Sparse files created. Ready for training!")
 
@@ -389,7 +389,7 @@ Examples:
         DatasetManager(global_config).download(args.dataset)
 
     elif args.command == "export-splat":
-        from src.exporter import convert_ply_to_splat
+        from src.utils.exporter import convert_ply_to_splat
         convert_ply_to_splat(args.input, args.output)
 
     elif args.command == "run-api":
