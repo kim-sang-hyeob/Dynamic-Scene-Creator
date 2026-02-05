@@ -7,7 +7,8 @@
 ```
 viewer/
 ├── convert_ply_to_splat.py      # PLY → .splat 변환
-├── convert_4dgs_to_splatv.py    # 4DGS 학습 결과 → .splatv 변환
+├── convert_4dgs_to_splatv.py    # 4DGS (HexPlane) → .splatv 변환
+├── convert_sc4d_to_splatv.py    # SC4D (MLP 기반) → .splatv 변환
 ├── merge_splat_files.py         # 3DGS(.splat) + 4DGS(.splatv) 병합
 └── web_viewer_final/            # 3DGS 경로 에디터 + 뷰어 + 녹화
     ├── index.html               # UI + 에디터 로직
@@ -83,7 +84,51 @@ PYTHONPATH=external/4dgs python viewer/convert_4dgs_to_splatv.py \
 
 ---
 
-### 3. merge_splat_files.py (배경 + 객체 병합)
+### 3. convert_sc4d_to_splatv.py (SC4D MLP 기반 → .splatv 변환)
+
+SC4D의 MLP 기반 4DGS 모델(s2 stage)을 `.splatv` 포맷으로 변환합니다.
+
+> ⚠️ **주의**: 이 스크립트는 `pytorch3d`를 사용하므로 SC4D conda 환경에서 실행해야 합니다.
+
+```bash
+# SC4D conda 환경 활성화
+conda activate sc4d
+
+# 기본 실행
+python viewer/convert_sc4d_to_splatv.py \
+    --model_dir SC4D/logs/penguin/s2 \
+    --output output.splatv
+
+# 특정 iteration 사용 (예: 8000)
+python viewer/convert_sc4d_to_splatv.py \
+    --model_dir SC4D/logs/penguin/s2 \
+    --output output.splatv \
+    --iteration 8000
+```
+
+**필수 옵션:**
+| 옵션 | 설명 |
+|------|------|
+| `--model_dir` | s2 디렉토리 경로 (point_cloud.ply, point_cloud_c.ply, timenet.pth 포함) |
+| `--output` | 출력 `.splatv` 파일 경로 |
+
+**추가 옵션:**
+| 옵션 | 기본값 | 설명 |
+|------|--------|------|
+| `--iteration` | None (최신) | 특정 iteration 사용 (예: 8000 → point_cloud_8000.ply) |
+| `--num_samples` | 30 | 모션 샘플링 수 (높을수록 정밀) |
+
+**필요 파일 구조:**
+```
+s2/
+├── point_cloud.ply       # Gaussian 데이터
+├── point_cloud_c.ply     # Control points
+└── timenet.pth           # MLP 가중치
+```
+
+---
+
+### 4. merge_splat_files.py (배경 + 객체 병합)
 
 정적 배경(.splat)과 동적 객체(.splatv)를 하나의 파일로 병합합니다.
 
@@ -194,6 +239,8 @@ python3 -m http.server 8090
 
 ## 워크플로우
 
+### HexPlane 기반 4DGS 사용 시
+
 ```bash
 # 1. 배경 PLY → .splat 변환
 python convert_ply_to_splat.py background.ply -o map.splat
@@ -207,6 +254,20 @@ python merge_splat_files.py map.splat model.splatv -o merged.splatv
 # 4. 경로 에디터 실행
 cd web_viewer_final && python3 -m http.server 8090
 # → .splat 드래그앤드롭 → 경로 편집 → WebM 녹화
+```
+
+### SC4D (MLP 기반) 사용 시
+
+```bash
+# 1. SC4D 모델 → .splatv 변환 (sc4d conda 환경 필요)
+conda activate sc4d
+python viewer/convert_sc4d_to_splatv.py \
+    --model_dir SC4D/logs/penguin/s2 \
+    --output model.splatv
+
+# 2. 경로 에디터에서 확인
+cd web_viewer_final && python3 -m http.server 8090
+# → .splatv 드래그앤드롭
 ```
 
 ---
