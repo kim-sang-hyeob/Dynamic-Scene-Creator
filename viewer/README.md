@@ -7,8 +7,9 @@
 ```
 viewer/
 ├── convert_ply_to_splat.py      # PLY → .splat 변환
-├── convert_4dgs_to_splatv.py    # 4DGS (HexPlane) → .splatv 변환
-├── convert_sc4d_to_splatv.py    # SC4D (MLP 기반) → .splatv 변환
+├── convert_spz_to_splat.py      # SPZ → .splat 변환 (Niantic 압축 포맷)
+├── convert_hexplane_to_splatv.py    # HexPlane 기반 4DGS → .splatv 변환
+├── convert_mlp_to_splatv.py         # MLP 기반 4DGS (SC4D) → .splatv 변환
 ├── merge_splat_files.py         # 3DGS(.splat) + 4DGS(.splatv) 병합
 └── web_viewer_final/            # 3DGS 경로 에디터 + 뷰어 + 녹화
     ├── index.html               # UI + 에디터 로직
@@ -22,7 +23,43 @@ viewer/
 
 ## 스크립트 사용법
 
-### 1. convert_ply_to_splat.py (PLY → .splat 변환)
+### 1. convert_spz_to_splat.py (SPZ → .splat 변환)
+
+Niantic의 압축 SPZ 파일을 웹 뷰어용 `.splat` 포맷으로 변환합니다.
+
+> SPZ는 PLY 대비 ~90% 압축률을 제공하는 3DGS 압축 포맷입니다.
+
+```bash
+# SPZ 라이브러리 설치 (최초 1회)
+git clone https://github.com/nianticlabs/spz.git
+cd spz && pip install .
+
+# 단일 파일 변환
+python convert_spz_to_splat.py model.spz -o model.splat
+
+# 여러 파일 일괄 변환
+python convert_spz_to_splat.py *.spz
+```
+
+**옵션:**
+| 옵션 | 설명 |
+|------|------|
+| `input_files` | 입력 SPZ 파일 (필수, 여러 개 가능) |
+| `-o, --output` | 출력 파일 경로 (단일 파일 입력 시만 유효) |
+| `--slow` | 메모리 효율적 모드 (대용량 파일용) |
+
+**SPZ + 4DGS 병합 워크플로우:**
+```bash
+# 1. SPZ → .splat 변환
+python convert_spz_to_splat.py background.spz -o background.splat
+
+# 2. .splat + .splatv 병합
+python merge_splat_files.py background.splat object.splatv -o merged.splatv
+```
+
+---
+
+### 3. convert_ply_to_splat.py (PLY → .splat 변환)
 
 3DGS로 학습된 PLY 파일을 웹 뷰어용 `.splat` 포맷으로 변환합니다.
 
@@ -55,7 +92,7 @@ let defaultViewMatrix = [
 
 ---
 
-### 2. convert_4dgs_to_splatv.py (4DGS → .splatv 변환)
+### 4. convert_hexplane_to_splatv.py (HexPlane 4DGS → .splatv 변환)
 
 4D Gaussian Splatting 모델을 애니메이션 지원 `.splatv` 포맷으로 변환합니다.
 
@@ -65,7 +102,7 @@ let defaultViewMatrix = [
 # 프로젝트 루트에서 실행
 cd /path/to/pro-cv-finalproject-cv-09-main
 
-PYTHONPATH=external/4dgs python viewer/convert_4dgs_to_splatv.py \
+PYTHONPATH=external/4dgs python viewer/convert_hexplane_to_splatv.py \
     --model_path output/4dgs/<dataset_name> \
     --output viewer/model.splatv
 ```
@@ -84,7 +121,7 @@ PYTHONPATH=external/4dgs python viewer/convert_4dgs_to_splatv.py \
 
 ---
 
-### 3. convert_sc4d_to_splatv.py (SC4D MLP 기반 → .splatv 변환)
+### 5. convert_mlp_to_splatv.py (MLP 기반 4DGS → .splatv 변환)
 
 SC4D의 MLP 기반 4DGS 모델(s2 stage)을 `.splatv` 포맷으로 변환합니다.
 
@@ -95,12 +132,12 @@ SC4D의 MLP 기반 4DGS 모델(s2 stage)을 `.splatv` 포맷으로 변환합니�
 conda activate sc4d
 
 # 기본 실행
-python viewer/convert_sc4d_to_splatv.py \
+python viewer/convert_mlp_to_splatv.py \
     --model_dir SC4D/logs/penguin/s2 \
     --output output.splatv
 
 # 특정 iteration 사용 (예: 8000)
-python viewer/convert_sc4d_to_splatv.py \
+python viewer/convert_mlp_to_splatv.py \
     --model_dir SC4D/logs/penguin/s2 \
     --output output.splatv \
     --iteration 8000
@@ -128,7 +165,7 @@ s2/
 
 ---
 
-### 4. merge_splat_files.py (배경 + 객체 병합)
+### 6. merge_splat_files.py (배경 + 객체 병합)
 
 정적 배경(.splat)과 동적 객체(.splatv)를 하나의 파일로 병합합니다.
 
@@ -246,7 +283,7 @@ python3 -m http.server 8090
 python convert_ply_to_splat.py background.ply -o map.splat
 
 # 2. 4DGS 모델 → .splatv 변환
-python convert_4dgs_to_splatv.py ./output/point_cloud/iteration_30000 -o model.splatv
+python convert_hexplane_to_splatv.py ./output/point_cloud/iteration_30000 -o model.splatv
 
 # 3. 배경 + 객체 병합
 python merge_splat_files.py map.splat model.splatv -o merged.splatv
@@ -256,12 +293,31 @@ cd web_viewer_final && python3 -m http.server 8090
 # → .splat 드래그앤드롭 → 경로 편집 → WebM 녹화
 ```
 
-### SC4D (MLP 기반) 사용 시
+### SPZ 압축 배경 + 4DGS 객체 병합 시
+
+```bash
+# 1. SPZ → .splat 변환 (Niantic 압축 포맷)
+python convert_spz_to_splat.py background.spz -o map.splat
+
+# 2. 4DGS 모델 → .splatv 변환
+PYTHONPATH=external/4dgs python viewer/convert_hexplane_to_splatv.py \
+    --model_path output/4dgs/<dataset_name> \
+    --output model.splatv
+
+# 3. 배경 + 객체 병합
+python merge_splat_files.py map.splat model.splatv -o merged.splatv \
+    --offset 0 0 0 --scale 1.0
+
+# 4. 경로 에디터에서 확인
+cd web_viewer_final && python3 -m http.server 8090
+```
+
+### MLP 기반 4DGS 사용 시
 
 ```bash
 # 1. SC4D 모델 → .splatv 변환 (sc4d conda 환경 필요)
 conda activate sc4d
-python viewer/convert_sc4d_to_splatv.py \
+python viewer/convert_mlp_to_splatv.py \
     --model_dir SC4D/logs/penguin/s2 \
     --output model.splatv
 

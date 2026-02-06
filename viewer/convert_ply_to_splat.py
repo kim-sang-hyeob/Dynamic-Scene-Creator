@@ -22,17 +22,68 @@ import numpy as np
 import argparse
 from io import BytesIO
 
+# ==================== Math Helpers ====================
+def rotation_matrix(rx, ry, rz):
+    rx, ry, rz = np.radians(rx), np.radians(ry), np.radians(rz)
+    Rx = np.array([[1, 0, 0], [0, np.cos(rx), -np.sin(rx)], [0, np.sin(rx), np.cos(rx)]])
+    Ry = np.array([[np.cos(ry), 0, np.sin(ry)], [0, 1, 0], [-np.sin(ry), 0, np.cos(ry)]])
+    Rz = np.array([[np.cos(rz), -np.sin(rz), 0], [np.sin(rz), np.cos(rz), 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
 
-def process_ply_to_splat(ply_file_path):
+def euler_to_quat(roll, pitch, yaw):
+    roll, pitch, yaw = np.radians([roll, pitch, yaw])
+    cy, sy = np.cos(yaw * 0.5), np.sin(yaw * 0.5)
+    cp, sp = np.cos(pitch * 0.5), np.sin(pitch * 0.5)
+    cr, sr = np.cos(roll * 0.5), np.sin(roll * 0.5)
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+    return np.array([w, x, y, z], dtype=np.float32)
+
+def q_mult(q1, q2):
+    # WXYZ convention
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2
+    ], dtype=np.float32)
+
+
+def process_ply_to_splat(ply_file_path, rotate_args=None, extra_yaw=0):
     """
-    Convert a 3DGS PLY file to splat format.
+    Convert a 3DGS PLY file to splat format with optional rectification.
     
     Args:
         ply_file_path: Path to the input PLY file
+        rotate_args: (rx, ry, rz) tuple for base rectification
+        extra_yaw: Extra yaw rotation in degrees
         
     Returns:
         bytes: The splat file data
     """
+    R_mat = np.eye(3, dtype=np.float32)
+    q_rot = np.array([1, 0, 0, 0], dtype=np.float32) # Identity w,x,y,z
+    
+    if rotate_args or extra_yaw != 0:
+        rx, ry, rz = rotate_args if rotate_args else (0, 0, 0)
+        
+        # Base Rectification
+        R_base = rotation_matrix(rx, ry, rz)
+        q_base = euler_to_quat(rx, ry, rz)
+        
+        # Extra Yaw (Global Y)
+        R_yaw = rotation_matrix(0, extra_yaw, 0)
+        q_yaw = euler_to_quat(0, extra_yaw, 0)
+        
+        # Combine: Yaw * Base
+        R_mat = (R_yaw @ R_base).astype(np.float32)
+        q_rot = q_mult(q_yaw, q_base)
+        print(f"Applying Rotation: Base={rotate_args}, ExtraYaw={extra_yaw}")
+    
     plydata = PlyData.read(ply_file_path)
     vert = plydata["vertex"]
     
@@ -58,11 +109,15 @@ def process_ply_to_splat(ply_file_path):
             )
         )
         
-        # Rotation quaternion
-        rot = np.array(
+        # Rotation quaternion [w, x, y, z] standard 3DGS
+        rot_curr = np.array(
             [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]],
             dtype=np.float32,
         )
+        
+        # Apply Transformation
+        position = (R_mat @ position)
+        rot = q_mult(q_rot, rot_curr) # Apply global rotation to local rotation
         
         # Convert SH DC coefficient to RGB color
         SH_C0 = 0.28209479177387814
@@ -130,6 +185,8 @@ or with any compatible WebGL Gaussian Splatting viewer.
         default=None,
         help="Output .splat file path (only valid for single input file)"
     )
+    parser.add_argument("--rotate", nargs=3, type=float, default=None, help="Rotation degrees (x y z) for rectification")
+    parser.add_argument("--extra-yaw", type=float, default=0, help="Additional global rotation around Y axis")
     
     args = parser.parse_args()
     
@@ -141,7 +198,7 @@ or with any compatible WebGL Gaussian Splatting viewer.
         print(f"Processing {input_file}...")
         
         try:
-            splat_data = process_ply_to_splat(input_file)
+            splat_data = process_ply_to_splat(input_file, args.rotate, args.extra_yaw)
             
             if args.output and len(args.input_files) == 1:
                 output_file = args.output

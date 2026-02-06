@@ -27,7 +27,43 @@ import torch.nn.functional as F
 from plyfile import PlyData
 from tqdm import tqdm
 from argparse import ArgumentParser
+from argparse import ArgumentParser
 import pytorch3d.ops
+
+# ==================== Math Helpers (Numpy) ====================
+def rotation_matrix(rx, ry, rz):
+    rx, ry, rz = np.radians(rx), np.radians(ry), np.radians(rz)
+    Rx = np.array([[1, 0, 0], [0, np.cos(rx), -np.sin(rx)], [0, np.sin(rx), np.cos(rx)]])
+    Ry = np.array([[np.cos(ry), 0, np.sin(ry)], [0, 1, 0], [-np.sin(ry), 0, np.cos(ry)]])
+    Rz = np.array([[np.cos(rz), -np.sin(rz), 0], [np.sin(rz), np.cos(rz), 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
+def euler_to_quat_wxyz(roll, pitch, yaw):
+    roll, pitch, yaw = np.radians([roll, pitch, yaw])
+    cy, sy = np.cos(yaw * 0.5), np.sin(yaw * 0.5)
+    cp, sp = np.cos(pitch * 0.5), np.sin(pitch * 0.5)
+    cr, sr = np.cos(roll * 0.5), np.sin(roll * 0.5)
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+    return np.array([w, x, y, z], dtype=np.float32)
+
+def q_mult_wxyz(q1, q2):
+    # q1, q2 are [N, 4] or [4]
+    # WXYZ convention
+    if q1.ndim == 1: q1 = q1[None, :]
+    if q2.ndim == 1: q2 = q2[None, :]
+    
+    w1, x1, y1, z1 = q1[:,0], q1[:,1], q1[:,2], q1[:,3]
+    w2, x2, y2, z2 = q2[:,0], q2[:,1], q2[:,2], q2[:,3]
+    
+    w = w1*w2 - x1*x2 - y1*y2 - z1*z2
+    x = w1*x2 + x1*w2 + y1*z2 - z1*y2
+    y = w1*y2 - x1*z2 + y1*w2 + z1*x2
+    z = w1*z2 + x1*y2 - y1*x2 + z1*w2
+    
+    return np.stack([w, x, y, z], axis=1)
 
 
 # ==================== Positional Encoding ====================
@@ -495,7 +531,7 @@ def write_splatv(output_path, base_positions, base_rotations, scales, rgb, opaci
 
 
 # ==================== Main Conversion ====================
-def convert_sc4d_to_splatv(model_dir, output_path, num_samples=30, iteration=None):
+def convert_sc4d_to_splatv(model_dir, output_path, num_samples=30, iteration=None, rotate_args=None):
     """Convert SC4D MLP-based 4DGS to splatv format."""
 
     # Determine file paths
@@ -551,6 +587,23 @@ def convert_sc4d_to_splatv(model_dir, output_path, num_samples=30, iteration=Non
         positions_over_time.append(pos)
         rotations_over_time.append(rot)
 
+        rotations_over_time.append(rot)
+
+    # Apply Global Rotation if requested
+    if rotate_args is not None:
+        print(f"Applying global rotation: {rotate_args}")
+        rx, ry, rz = rotate_args
+        R_mat = rotation_matrix(rx, ry, rz).astype(np.float32)
+        q_global = euler_to_quat_wxyz(rx, ry, rz)
+        
+        # Rotate positions: P_new = P_old @ R_T
+        # Rotate quaternions: Q_new = Q_global * Q_old
+        for i in range(len(positions_over_time)):
+            positions_over_time[i] = positions_over_time[i] @ R_mat.T
+            
+            # Rotations are [N, 4] wxyz
+            rotations_over_time[i] = q_mult_wxyz(q_global, rotations_over_time[i])
+
     # Fit motion parameters
     print("Fitting motion parameters...")
     base_positions, motion_coeffs, trbf_center = fit_motion_params(positions_over_time, times)
@@ -583,6 +636,8 @@ def main():
                         help="Number of time samples for fitting (default: 30)")
     parser.add_argument("--iteration", type=int, default=None,
                         help="Specific iteration to load (e.g., 8000 for point_cloud_8000.ply)")
+    parser.add_argument("--rotate", nargs=3, type=float, default=None, 
+                        help="Rotation degrees (x y z) to apply to the model")
 
     args = parser.parse_args()
 
@@ -590,7 +645,8 @@ def main():
         args.model_dir,
         args.output,
         args.num_samples,
-        args.iteration
+        args.iteration,
+        args.rotate
     )
 
 
