@@ -6,10 +6,11 @@
 
 ```
 viewer/
+├── format_manage.py             # 통합 CLI (convert, merge, list)
 ├── convert_ply_to_splat.py      # PLY → .splat 변환
 ├── convert_spz_to_splat.py      # SPZ → .splat 변환 (Niantic 압축 포맷)
 ├── convert_hexplane_to_splatv.py    # HexPlane 기반 4DGS → .splatv 변환
-├── convert_mlp_to_splatv.py         # MLP 기반 4DGS (SC4D) → .splatv 변환
+├── convert_mlp_to_splatv.py         # MLP 기반 4DGS → .splatv 변환
 ├── merge_splat_files.py         # 3DGS(.splat) + 4DGS(.splatv) 병합
 └── web_viewer_final/            # 3DGS 경로 에디터 + 뷰어 + 녹화
     ├── index.html               # UI + 에디터 로직
@@ -21,7 +22,69 @@ viewer/
 
 ---
 
-## 스크립트 사용법
+## format_manage.py (통합 CLI)
+
+모든 변환 및 병합 기능을 하나의 CLI로 통합한 도구입니다.
+
+### 명령어 목록
+
+```bash
+python format_manage.py --help          # 전체 도움말
+python format_manage.py list            # 지원 포맷 목록
+python format_manage.py convert --help  # 변환 도움말
+python format_manage.py merge --help    # 병합 도움말
+```
+
+### convert 명령어
+
+```bash
+# PLY → .splat
+python format_manage.py convert input.ply -o output.splat
+
+# SPZ → .splat
+python format_manage.py convert input.spz -o output.splat
+
+# HexPlane 4DGS → .splatv (4dgs 환경 필요)
+python format_manage.py convert --type hexplane \
+    --model-path <model_dir> \
+    --iteration 14000 \
+    --num-samples 20 \
+    -o output.splatv
+
+# MLP 4DGS → .splatv (sc4d 환경 필요)
+python format_manage.py convert --type mlp \
+    --model-dir <s2_dir> \
+    --num-samples 30 \
+    -o output.splatv
+```
+
+### merge 명령어
+
+```bash
+# 기본 병합
+python format_manage.py merge background.splat object.splatv -o merged.splatv
+
+# 위치/크기 조정
+python format_manage.py merge background.splat object.splatv -o merged.splatv \
+    --offset 0 1.5 -2 --scale 0.5
+
+# 배경도 조정
+python format_manage.py merge background.splat object.splatv -o merged.splatv \
+    --bg-offset 0 0 0 --bg-scale 1.0 --bg-rotate 0 90 0
+```
+
+### 환경 요구사항
+
+| 변환 타입 | 필요 환경 |
+|-----------|-----------|
+| PLY/SPZ → splat | 기본 Python (numpy, spz) |
+| HexPlane → splatv | 4DGS conda 환경 + PYTHONPATH 설정 |
+| MLP → splatv | SC4D conda 환경 (pytorch3d 포함) |
+| merge | 기본 Python |
+
+---
+
+## 개별 스크립트 사용법
 
 ### 1. convert_spz_to_splat.py (SPZ → .splat 변환)
 
@@ -94,17 +157,21 @@ let defaultViewMatrix = [
 
 ### 4. convert_hexplane_to_splatv.py (HexPlane 4DGS → .splatv 변환)
 
-4D Gaussian Splatting 모델을 애니메이션 지원 `.splatv` 포맷으로 변환합니다.
+HexPlane 기반 4D Gaussian Splatting 모델을 애니메이션 지원 `.splatv` 포맷으로 변환합니다.
 
-> ⚠️ **주의**: 이 스크립트는 4DGS 모듈을 사용하므로 `PYTHONPATH` 설정과 프로젝트 루트에서 실행이 필요합니다.
+> ⚠️ **환경 요구사항**:
+> - 4DGS conda 환경 활성화 필요
+> - `PYTHONPATH`에 4DGS 모듈 경로 설정 필요
+> - 4DGS 프로젝트 루트에서 실행 권장
 
 ```bash
-# 프로젝트 루트에서 실행
-cd /path/to/pro-cv-finalproject-cv-09-main
+# 4DGS 프로젝트 루트에서 실행
+cd <4dgs_project_root>
+export PYTHONPATH=.
 
-PYTHONPATH=external/4dgs python viewer/convert_hexplane_to_splatv.py \
-    --model_path output/4dgs/<dataset_name> \
-    --output viewer/model.splatv
+python convert_hexplane_to_splatv.py \
+    --model_path <model_dir> \
+    --output output.splatv
 ```
 
 **필수 옵션:**
@@ -123,22 +190,21 @@ PYTHONPATH=external/4dgs python viewer/convert_hexplane_to_splatv.py \
 
 ### 5. convert_mlp_to_splatv.py (MLP 기반 4DGS → .splatv 변환)
 
-SC4D의 MLP 기반 4DGS 모델(s2 stage)을 `.splatv` 포맷으로 변환합니다.
+MLP 기반 4DGS 모델(s2 stage)을 `.splatv` 포맷으로 변환합니다.
 
-> ⚠️ **주의**: 이 스크립트는 `pytorch3d`를 사용하므로 SC4D conda 환경에서 실행해야 합니다.
+> ⚠️ **환경 요구사항**:
+> - SC4D conda 환경 활성화 필요 (`pytorch3d` 포함)
+> - CUDA 및 컴파일러 환경 설정 필요할 수 있음
 
 ```bash
-# SC4D conda 환경 활성화
-conda activate sc4d
-
-# 기본 실행
-python viewer/convert_mlp_to_splatv.py \
-    --model_dir SC4D/logs/penguin/s2 \
+# SC4D conda 환경에서 실행
+python convert_mlp_to_splatv.py \
+    --model_dir <s2_dir> \
     --output output.splatv
 
-# 특정 iteration 사용 (예: 8000)
-python viewer/convert_mlp_to_splatv.py \
-    --model_dir SC4D/logs/penguin/s2 \
+# 특정 iteration 사용
+python convert_mlp_to_splatv.py \
+    --model_dir <s2_dir> \
     --output output.splatv \
     --iteration 8000
 ```
@@ -276,36 +342,41 @@ python3 -m http.server 8090
 
 ## 워크플로우
 
+> 💡 개별 스크립트 대신 `format_manage.py`를 사용할 수도 있습니다.
+
 ### HexPlane 기반 4DGS 사용 시
 
 ```bash
-# 1. 배경 PLY → .splat 변환
-python convert_ply_to_splat.py background.ply -o map.splat
+# 4DGS conda 환경 활성화 후 실행
 
-# 2. 4DGS 모델 → .splatv 변환
-python convert_hexplane_to_splatv.py ./output/point_cloud/iteration_30000 -o model.splatv
+# 1. 배경 PLY → .splat 변환
+python format_manage.py convert background.ply -o map.splat
+
+# 2. HexPlane 모델 → .splatv 변환 (PYTHONPATH 설정 필요)
+python format_manage.py convert --type hexplane \
+    --model-path <model_dir> \
+    -o model.splatv
 
 # 3. 배경 + 객체 병합
-python merge_splat_files.py map.splat model.splatv -o merged.splatv
+python format_manage.py merge map.splat model.splatv -o merged.splatv
 
 # 4. 경로 에디터 실행
 cd web_viewer_final && python3 -m http.server 8090
-# → .splat 드래그앤드롭 → 경로 편집 → WebM 녹화
 ```
 
-### SPZ 압축 배경 + 4DGS 객체 병합 시
+### SPZ 배경 + 4DGS 객체 병합 시
 
 ```bash
-# 1. SPZ → .splat 변환 (Niantic 압축 포맷)
-python convert_spz_to_splat.py background.spz -o map.splat
+# 1. SPZ → .splat 변환
+python format_manage.py convert background.spz -o map.splat
 
-# 2. 4DGS 모델 → .splatv 변환
-PYTHONPATH=external/4dgs python viewer/convert_hexplane_to_splatv.py \
-    --model_path output/4dgs/<dataset_name> \
-    --output model.splatv
+# 2. HexPlane 모델 → .splatv 변환 (4DGS 환경 필요)
+python format_manage.py convert --type hexplane \
+    --model-path <model_dir> \
+    -o model.splatv
 
 # 3. 배경 + 객체 병합
-python merge_splat_files.py map.splat model.splatv -o merged.splatv \
+python format_manage.py merge map.splat model.splatv -o merged.splatv \
     --offset 0 0 0 --scale 1.0
 
 # 4. 경로 에디터에서 확인
@@ -315,15 +386,15 @@ cd web_viewer_final && python3 -m http.server 8090
 ### MLP 기반 4DGS 사용 시
 
 ```bash
-# 1. SC4D 모델 → .splatv 변환 (sc4d conda 환경 필요)
-conda activate sc4d
-python viewer/convert_mlp_to_splatv.py \
-    --model_dir SC4D/logs/penguin/s2 \
-    --output model.splatv
+# SC4D conda 환경 활성화 후 실행
+
+# 1. MLP 모델 → .splatv 변환
+python format_manage.py convert --type mlp \
+    --model-dir <s2_dir> \
+    -o model.splatv
 
 # 2. 경로 에디터에서 확인
 cd web_viewer_final && python3 -m http.server 8090
-# → .splatv 드래그앤드롭
 ```
 
 ---
