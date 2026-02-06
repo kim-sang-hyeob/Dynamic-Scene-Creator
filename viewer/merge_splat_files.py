@@ -224,10 +224,10 @@ def splat_to_texdata(gaussians, offset=(0, 0, 0), scale=1.0, rotation=(0, 0, 0))
         
         # Rotation from uint8 to normalized quaternion
         # (val - 128) / 128 maps 0..255 to -1..1 (approx)
-        rot_0 = (rots_u8[j, 0] - 128) / 128.0
-        rot_1 = (rots_u8[j, 1] - 128) / 128.0
-        rot_2 = (rots_u8[j, 2] - 128) / 128.0
-        rot_3 = (rots_u8[j, 3] - 128) / 128.0
+        rot_0 = (float(rots_u8[j, 0]) - 128.0) / 128.0
+        rot_1 = (float(rots_u8[j, 1]) - 128.0) / 128.0
+        rot_2 = (float(rots_u8[j, 2]) - 128.0) / 128.0
+        rot_3 = (float(rots_u8[j, 3]) - 128.0) / 128.0
         
         # Normalize just in case
         norm = np.sqrt(rot_0*rot_0 + rot_1*rot_1 + rot_2*rot_2 + rot_3*rot_3)
@@ -594,20 +594,35 @@ Examples:
              # Find Min and Max Y
              min_y = np.min(scaled_positions[:, 1])
              max_y = np.max(scaled_positions[:, 1])
-             print(f"Object Vertical Bounds (Rotated & Scaled): Min Y = {min_y:.4f}, Max Y = {max_y:.4f}")
+             print(f"DEBUG: Snap To Floor Analysis")
+             print(f"  Target Floor Y (from Lumina): {lumina_target_y:.4f}")
+             print(f"  Object Bounds (Rotated & Scaled): Min Y = {min_y:.4f}, Max Y = {max_y:.4f}")
              
              # Calculate required adjustment
-             # Based on user feedback, the coordinate system seems to be Y-Down (or similar),
-             # where aligning 'min_y' caused the object to be "under" the floor (Top aligned to floor).
-             # Therefore, we should align 'max_y' (Visual Bottom in Y-Down) to the target.
+             # We assume Y-Down coordinate system (Visual Down is +Y).
+             # Feet should be at max_y.
+             # We want Feet to be at lumina_target_y.
+             # Current Feet Y (relative to origin) = max_y
+             # We want (max_y + adjustment) = 0  <-- Wait, this logic was ensuring feet are at local 0?
+             # No, current_offset already has lumina_offset added to it (lines 573).
+             # So current_offset = (Lumina_X, Lumina_Y, Lumina_Z) + Manual_Offset.
+             # If we add snap_adjustment, Final_Y = Lumina_Y + Manual_Y + snap_adjustment.
+             # Position_Final = Position_Local + Final_Offset.
+             # Feet_Final = max_y + Lumina_Y + Manual_Y + snap_adjustment.
+             # We want Feet_Final = Lumina_Y.
+             # => max_y + Lumina_Y + Manual_Y + snap_adjustment = Lumina_Y
+             # => snap_adjustment = -(max_y + Manual_Y).
+             # Assuming Manual_Y is usually 0.
              
-             # We want Max(Final Position Y) = Lumina_Y
-             # Max(Scaled_Rotated_Y) + Manual_Offset_Y + Lumina_Y = Lumina_Y
-             # => Max_Y + Manual_Offset_Y = 0
-             # => Manual_Offset_Y = -Max_Y
+             # Previous code:
+             # snap_adjustment = -max_y
+             # This assumes Manual_Y is 0, which is fine.
+             # But let's verify if max_y is actually positive/negative relative to what logic expects.
              
              snap_adjustment = -max_y
-             print(f"Auto-Snap: Using Max Y (assuming Y-down/Feet-at-Max) -> Adjusting Y offset by {snap_adjustment:.4f}")
+             print(f"  Calculated Snap Adjustment: {snap_adjustment:.4f}")
+             print(f"  Final Y Offset Component: {current_offset[1]} + {snap_adjustment} = {current_offset[1] + snap_adjustment}")
+             
              current_offset[1] += snap_adjustment
              
         else:
