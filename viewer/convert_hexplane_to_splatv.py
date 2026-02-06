@@ -1,5 +1,5 @@
 """
-Convert 4DGS model to splaTV format.
+Convert HexPlane 4DGS model to splatv format.
 
 splaTV format stores motion parameters per Gaussian:
 - position: float32[3]
@@ -149,7 +149,7 @@ def fit_rotation_params(rotations_over_time, times):
     return base_rotations, omega_coeffs
 
 def convert_to_splatv(gaussians, output_path, num_samples=20):
-    """Convert 4DGS model to splaTV format."""
+    """Convert HexPlane 4DGS model to splatv format."""
     
     print(f"Sampling {num_samples} time points...")
     times = np.linspace(0, 1, num_samples)
@@ -272,7 +272,7 @@ def convert_to_splatv(gaussians, output_path, num_samples=20):
     print(f"  Time samples used: {num_samples}")
 
 def main():
-    parser = ArgumentParser(description="Convert 4DGS to splaTV format")
+    parser = ArgumentParser(description="Convert HexPlane 4DGS to splatv format")
     model = ModelParams(parser, sentinel=True)
     pipeline = PipelineParams(parser)
     hyperparam = ModelHiddenParams(parser)
