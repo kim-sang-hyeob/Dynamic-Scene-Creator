@@ -18,6 +18,7 @@ import struct
 import json
 import argparse
 from pathlib import Path
+from scipy.interpolate import CubicSpline
 
 
 def pack_half2x16(x, y):
@@ -489,6 +490,163 @@ def get_positions_from_splatv(texdata, count):
     # Ensure we don't go out of bounds if texture is padded
     reshaped = texdata_f.reshape(-1, 16)
     return reshaped[:count, 0:3]
+
+
+def interpolate_path(control_points, num_samples=100):
+    """
+    Interpolate control points using Natural Cubic Spline.
+
+    Args:
+        control_points: list of [x, y, z] positions
+        num_samples: number of samples for path fitting
+
+    Returns:
+        positions: array of shape (num_samples, 3)
+        t_values: array of parameter values [0, 1]
+    """
+    points = np.array(control_points)
+    n = len(points)
+
+    if n < 2:
+        raise ValueError("Need at least 2 control points for path animation")
+
+    if n == 2:
+        # Linear interpolation
+        t_values = np.linspace(0, 1, num_samples)
+        positions = np.outer(1 - t_values, points[0]) + np.outer(t_values, points[1])
+        return positions, t_values
+
+    # Cubic spline interpolation
+    # Parameter t based on cumulative chord length for more uniform spacing
+    chord_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    t_control = np.zeros(n)
+    t_control[1:] = np.cumsum(chord_lengths)
+    t_control /= t_control[-1]  # Normalize to [0, 1]
+
+    # Create cubic splines for each dimension
+    cs_x = CubicSpline(t_control, points[:, 0], bc_type='natural')
+    cs_y = CubicSpline(t_control, points[:, 1], bc_type='natural')
+    cs_z = CubicSpline(t_control, points[:, 2], bc_type='natural')
+
+    t_values = np.linspace(0, 1, num_samples)
+    positions = np.stack([cs_x(t_values), cs_y(t_values), cs_z(t_values)], axis=1)
+
+    return positions, t_values
+
+
+def fit_path_motion_coefficients(path_positions, t_values):
+    """
+    Fit polynomial coefficients for path motion.
+
+    The splatv format uses:
+        position(t) = base_pos + linear*dt + quadratic*dt² + cubic*dt³
+    where dt = t - 0.5 (trbf_center)
+
+    Args:
+        path_positions: array of shape (N, 3) - positions along path
+        t_values: array of parameter values [0, 1]
+
+    Returns:
+        base_position: position at t=0.5
+        linear: [3] linear coefficients
+        quadratic: [3] quadratic coefficients
+        cubic: [3] cubic coefficients
+    """
+    # Convert t to dt (centered at 0.5)
+    dt = t_values - 0.5
+
+    # Find center position (at t=0.5)
+    center_idx = np.argmin(np.abs(t_values - 0.5))
+    base_position = path_positions[center_idx].copy()
+
+    # Compute offsets from center position
+    offsets = path_positions - base_position
+
+    # Build design matrix for polynomial fitting: [dt, dt², dt³]
+    A = np.column_stack([dt, dt**2, dt**3])
+
+    # Fit coefficients for each dimension
+    linear = np.zeros(3)
+    quadratic = np.zeros(3)
+    cubic = np.zeros(3)
+
+    for dim in range(3):
+        coeffs, _, _, _ = np.linalg.lstsq(A, offsets[:, dim], rcond=None)
+        linear[dim] = coeffs[0]
+        quadratic[dim] = coeffs[1]
+        cubic[dim] = coeffs[2]
+
+    return base_position, linear, quadratic, cubic
+
+
+def add_path_motion_to_splatv(texdata, count, path_base_offset, path_linear, path_quadratic, path_cubic):
+    """
+    Add path motion coefficients to existing splatv motion data.
+
+    This modifies the texdata in-place, adding the path motion on top of
+    the object's internal motion (e.g., cat walking animation).
+
+    Args:
+        texdata: splatv texture data (uint32 array)
+        count: number of gaussians
+        path_base_offset: [3] offset to add to base positions
+        path_linear: [3] linear motion coefficients to add
+        path_quadratic: [3] quadratic motion coefficients to add
+        path_cubic: [3] cubic motion coefficients to add
+    """
+    texdata_f = texdata.view(np.float32)
+    texdata_u32 = texdata.reshape(-1, 16)
+
+    # Helper functions for half-float packing
+    def unpack_halves(packed):
+        low = (packed & 0xFFFF).astype(np.uint16).view(np.float16).astype(np.float32)
+        high = (packed >> 16).astype(np.uint16).view(np.float16).astype(np.float32)
+        return low, high
+
+    def pack_halves(l, h):
+        l_f16 = np.asarray(l).astype(np.float16).view(np.uint16)
+        h_f16 = np.asarray(h).astype(np.float16).view(np.uint16)
+        return l_f16.astype(np.uint32) | (h_f16.astype(np.uint32) << 16)
+
+    # Add offset to base positions
+    flat_view = texdata_f.reshape(-1, 16)
+    flat_view[:count, 0] += path_base_offset[0]
+    flat_view[:count, 1] += path_base_offset[1]
+    flat_view[:count, 2] += path_base_offset[2]
+
+    # Unpack existing motion coefficients and add path motion
+    # Motion layout in texdata (indices 8-14 in uint32 view):
+    # [8]: motion_0, motion_1 (linear x, y)
+    # [9]: motion_2, motion_3 (linear z, quadratic x)
+    # [10]: motion_4, motion_5 (quadratic y, z)
+    # [11]: motion_6, motion_7 (cubic x, y)
+    # [12]: motion_8, 0 (cubic z, padding)
+
+    for j in range(count):
+        # Unpack existing motion
+        m0, m1 = unpack_halves(texdata_u32[j, 8])      # linear x, y
+        m2, m3 = unpack_halves(texdata_u32[j, 9])      # linear z, quad x
+        m4, m5 = unpack_halves(texdata_u32[j, 10])     # quad y, z
+        m6, m7 = unpack_halves(texdata_u32[j, 11])     # cubic x, y
+        m8, _ = unpack_halves(texdata_u32[j, 12])      # cubic z
+
+        # Add path motion
+        m0 += path_linear[0]
+        m1 += path_linear[1]
+        m2 += path_linear[2]
+        m3 += path_quadratic[0]
+        m4 += path_quadratic[1]
+        m5 += path_quadratic[2]
+        m6 += path_cubic[0]
+        m7 += path_cubic[1]
+        m8 += path_cubic[2]
+
+        # Pack back
+        texdata_u32[j, 8] = pack_halves(m0, m1)
+        texdata_u32[j, 9] = pack_halves(m2, m3)
+        texdata_u32[j, 10] = pack_halves(m4, m5)
+        texdata_u32[j, 11] = pack_halves(m6, m7)
+        texdata_u32[j, 12] = pack_halves(m8, 0)
     
 
 def main():
@@ -534,7 +692,11 @@ Examples:
                         metavar=('X', 'Y', 'Z'),
                         help="Rotation for background in degrees (default: 0 0 0)")
     parser.add_argument("--lumina-path", help="Path to lumina_path.json to extract position offset")
-    
+    parser.add_argument("--animate", action="store_true",
+                        help="Animate object along the path defined in lumina-path")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="Animation speed multiplier (default: 1.0)")
+
     args = parser.parse_args()
     
     print("=" * 50)
@@ -558,73 +720,92 @@ Examples:
     else:
         raise ValueError(f"Unsupported object format: {obj_file.suffix}")
 
-    # 2. Determine Base Offset
+    # 2. Determine Base Offset and Path Animation
     lumina_target_y = None
-    current_offset = np.array(args.offset) # Start with manual offset
-    
+    current_offset = np.array(args.offset)  # Start with manual offset
+    path_animation_data = None  # Will hold (base_offset, linear, quadratic, cubic) if animate is True
+
     if args.lumina_path:
         try:
             with open(args.lumina_path, 'r') as f:
                 lumina_data = json.load(f)
                 if 'controlPoints' in lumina_data and len(lumina_data['controlPoints']) > 0:
-                    start_pos = lumina_data['controlPoints'][0]['position']
-                    lumina_offset = np.array(start_pos)
-                    print(f"Loaded offset from {args.lumina_path}: {lumina_offset}")
-                    current_offset = current_offset + lumina_offset
-                    lumina_target_y = lumina_offset[1]
+                    control_points = [cp['position'] for cp in lumina_data['controlPoints']]
+
+                    if args.animate and len(control_points) >= 2:
+                        # Path animation mode
+                        print(f"\n[PATH ANIMATION MODE]")
+                        print(f"  Control points: {len(control_points)}")
+                        for i, cp in enumerate(control_points):
+                            print(f"    [{i}]: {cp}")
+
+                        # Interpolate path
+                        path_positions, t_values = interpolate_path(control_points)
+
+                        # Fit motion coefficients
+                        path_base, path_linear, path_quad, path_cubic = fit_path_motion_coefficients(
+                            path_positions, t_values
+                        )
+
+                        print(f"\n  Path motion coefficients:")
+                        print(f"    Base (t=0.5): {path_base}")
+                        print(f"    Linear: {path_linear}")
+                        print(f"    Quadratic: {path_quad}")
+                        print(f"    Cubic: {path_cubic}")
+
+                        # Store for later application
+                        path_animation_data = (path_base, path_linear, path_quad, path_cubic)
+
+                        # For snap-to-floor, use the Y value at path center
+                        lumina_target_y = path_base[1]
+
+                        # Don't add offset here - it will be added via motion coefficients
+                        print(f"\n  Path start: {control_points[0]}")
+                        print(f"  Path end: {control_points[-1]}")
+                        print(f"  Path length: {np.linalg.norm(np.diff(path_positions, axis=0), axis=1).sum():.2f} units")
+                    else:
+                        # Static placement mode (original behavior)
+                        start_pos = control_points[0]
+                        lumina_offset = np.array(start_pos)
+                        print(f"Loaded offset from {args.lumina_path}: {lumina_offset}")
+                        current_offset = current_offset + lumina_offset
+                        lumina_target_y = lumina_offset[1]
                 else:
                     print(f"Warning: No control points found in {args.lumina_path}")
         except Exception as e:
             print(f"Error reading lumina path: {e}")
+            import traceback
+            traceback.print_exc()
             
     # 3. Apply Snap to Floor Logic
     if args.snap_to_floor:
         if lumina_target_y is not None:
-             # Compute rotated & scaled Y bounds
-             # Apply Rotation
-             R = rotation_matrix(*args.rotate)
-             
-             # Rotate positions
-             # raw_positions is (N, 3)
-             rotated_positions = raw_positions @ R.T
-             
-             # Apply Scale
-             scaled_positions = rotated_positions * args.scale
-             
-             # Find Min and Max Y
-             min_y = np.min(scaled_positions[:, 1])
-             max_y = np.max(scaled_positions[:, 1])
-             print(f"DEBUG: Snap To Floor Analysis")
-             print(f"  Target Floor Y (from Lumina): {lumina_target_y:.4f}")
-             print(f"  Object Bounds (Rotated & Scaled): Min Y = {min_y:.4f}, Max Y = {max_y:.4f}")
-             
-             # Calculate required adjustment
-             # We assume Y-Down coordinate system (Visual Down is +Y).
-             # Feet should be at max_y.
-             # We want Feet to be at lumina_target_y.
-             # Current Feet Y (relative to origin) = max_y
-             # We want (max_y + adjustment) = 0  <-- Wait, this logic was ensuring feet are at local 0?
-             # No, current_offset already has lumina_offset added to it (lines 573).
-             # So current_offset = (Lumina_X, Lumina_Y, Lumina_Z) + Manual_Offset.
-             # If we add snap_adjustment, Final_Y = Lumina_Y + Manual_Y + snap_adjustment.
-             # Position_Final = Position_Local + Final_Offset.
-             # Feet_Final = max_y + Lumina_Y + Manual_Y + snap_adjustment.
-             # We want Feet_Final = Lumina_Y.
-             # => max_y + Lumina_Y + Manual_Y + snap_adjustment = Lumina_Y
-             # => snap_adjustment = -(max_y + Manual_Y).
-             # Assuming Manual_Y is usually 0.
-             
-             # Previous code:
-             # snap_adjustment = -max_y
-             # This assumes Manual_Y is 0, which is fine.
-             # But let's verify if max_y is actually positive/negative relative to what logic expects.
-             
-             snap_adjustment = -max_y
-             print(f"  Calculated Snap Adjustment: {snap_adjustment:.4f}")
-             print(f"  Final Y Offset Component: {current_offset[1]} + {snap_adjustment} = {current_offset[1] + snap_adjustment}")
-             
-             current_offset[1] += snap_adjustment
-             
+            # Compute rotated & scaled Y bounds
+            R = rotation_matrix(*args.rotate)
+            rotated_positions = raw_positions @ R.T
+            scaled_positions = rotated_positions * args.scale
+
+            min_y = np.min(scaled_positions[:, 1])
+            max_y = np.max(scaled_positions[:, 1])
+            print(f"\n[SNAP TO FLOOR]")
+            print(f"  Target Floor Y (from Lumina): {lumina_target_y:.4f}")
+            print(f"  Object Bounds (Rotated & Scaled): Min Y = {min_y:.4f}, Max Y = {max_y:.4f}")
+
+            # Snap adjustment: align object bottom (max_y) to floor level
+            snap_adjustment = -max_y
+            print(f"  Calculated Snap Adjustment: {snap_adjustment:.4f}")
+
+            if path_animation_data is not None:
+                # In path animation mode, adjust the path base position
+                path_base, path_linear, path_quad, path_cubic = path_animation_data
+                path_base = path_base.copy()
+                path_base[1] += snap_adjustment
+                path_animation_data = (path_base, path_linear, path_quad, path_cubic)
+                print(f"  Adjusted path base Y: {path_base[1]:.4f}")
+            else:
+                # Static placement mode
+                current_offset[1] += snap_adjustment
+                print(f"  Final Y Offset: {current_offset[1]:.4f}")
         else:
             print("Warning: --snap-to-floor requires --lumina-path to determine ground level. Skipping snap.")
             
@@ -658,12 +839,22 @@ Examples:
     
     # Process Object (using previously loaded data)
     if obj_file.suffix.lower() == '.splatv':
-        obj_texdata = transform_splatv(
-            obj_data_raw,
-            offset=tuple(current_offset),
-            scale=args.scale,
-            rotation=tuple(args.rotate)
-        )
+        if path_animation_data is not None:
+            # For path animation, transform without the path offset first
+            # (path offset is handled via motion coefficients)
+            obj_texdata = transform_splatv(
+                obj_data_raw,
+                offset=tuple(args.offset),  # Only manual offset, not lumina
+                scale=args.scale,
+                rotation=tuple(args.rotate)
+            )
+        else:
+            obj_texdata = transform_splatv(
+                obj_data_raw,
+                offset=tuple(current_offset),
+                scale=args.scale,
+                rotation=tuple(args.rotate)
+            )
     elif obj_file.suffix.lower() == '.splat':
         obj_texdata, _, _ = splat_to_texdata(
             obj_data_raw,
@@ -671,6 +862,31 @@ Examples:
             scale=args.scale,
             rotation=tuple(args.rotate)
         )
+
+    # Apply path animation if enabled
+    if path_animation_data is not None and obj_file.suffix.lower() == '.splatv':
+        path_base, path_linear, path_quad, path_cubic = path_animation_data
+
+        # Apply speed multiplier to motion coefficients
+        # Higher speed = faster motion = larger coefficients
+        speed = args.speed
+        path_linear_scaled = path_linear * speed
+        path_quad_scaled = path_quad * speed
+        path_cubic_scaled = path_cubic * speed
+
+        print(f"\n[Applying Path Animation]")
+        print(f"  Speed: {speed}x")
+
+        add_path_motion_to_splatv(
+            obj_texdata,
+            obj_count,
+            path_base,
+            path_linear_scaled,
+            path_quad_scaled,
+            path_cubic_scaled
+        )
+
+        print(f"  Path motion applied to {obj_count:,} gaussians")
     
     print(f"\nBackground: {bg_count:,} gaussians")
     print(f"Object: {obj_count:,} gaussians")
