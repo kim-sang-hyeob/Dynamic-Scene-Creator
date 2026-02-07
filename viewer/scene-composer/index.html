@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>4DGS Scene Composer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="css/composer.css">
+</head>
+
+<body>
+  <canvas id="canvas"></canvas>
+
+  <!-- Progress bar -->
+  <div id="progress" style="width: 0%"></div>
+
+  <!-- Top HUD -->
+  <div id="top-bar">
+    <span id="fps" class="stat-tag">0 fps</span>
+    <span id="gaussian-count" class="stat-tag">0 gaussians</span>
+    <span id="layer-count" class="stat-tag">0 layers</span>
+    <span id="gizmo-mode" class="stat-tag" style="display:none;">G: Translate</span>
+  </div>
+
+  <!-- Loading spinner -->
+  <div id="spinner" style="display: none;">
+    <div class="spinner-ring"></div>
+    <span style="font-size: 13px; color: var(--text-secondary);">Loading...</span>
+  </div>
+
+  <!-- Drag-and-drop zone -->
+  <div id="drop-zone" class="empty">
+    <div class="drop-icon">+</div>
+    <div class="drop-label">Drop .splat, .ply, or .splatv file here</div>
+    <div class="drop-label" style="font-size: 11px; opacity: 0.6;">or drag multiple files as layers</div>
+  </div>
+
+  <!-- Right Sidebar (tabbed: Layers / Path) -->
+  <div id="sidebar-panel" class="glass">
+    <!-- Tab Headers -->
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" data-tab="layers">Layers</button>
+      <button class="sidebar-tab" data-tab="path">Path</button>
+    </div>
+
+    <!-- Tab 1: Layers -->
+    <div id="tab-layers" class="sidebar-tab-content active">
+      <div id="layer-list"></div>
+
+      <!-- Transform inputs for selected layer -->
+      <div id="transform-section" class="transform-section hidden">
+        <div class="transform-title">Position</div>
+        <div class="transform-row">
+          <span class="transform-label x">X</span>
+          <input id="pos-x" class="transform-input" type="number" step="0.1" value="0">
+          <span class="transform-label y">Y</span>
+          <input id="pos-y" class="transform-input" type="number" step="0.1" value="0">
+          <span class="transform-label z">Z</span>
+          <input id="pos-z" class="transform-input" type="number" step="0.1" value="0">
+        </div>
+
+        <div class="transform-title">Rotation</div>
+        <div class="transform-row">
+          <span class="transform-label x">X</span>
+          <input id="rot-x" class="transform-input" type="number" step="5" value="0">
+          <span class="transform-label y">Y</span>
+          <input id="rot-y" class="transform-input" type="number" step="5" value="0">
+          <span class="transform-label z">Z</span>
+          <input id="rot-z" class="transform-input" type="number" step="5" value="0">
+        </div>
+
+        <div class="transform-title">Scale</div>
+        <div class="transform-row">
+          <span class="transform-label" style="color:var(--text-muted)">S</span>
+          <input id="scale" class="transform-input" type="number" step="0.1" min="0.01" max="100" value="1.00">
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <button class="add-layer-btn">+ Add Layer</button>
+      </div>
+    </div>
+
+    <!-- Tab 2: Path (filled by PathEditorPanel) -->
+    <div id="tab-path" class="sidebar-tab-content">
+      <div class="scroll-area" id="path-scroll-area">
+        <!-- Mode buttons (2x2 grid) -->
+        <div class="pe-section-title">INTERACTION MODE</div>
+        <div id="pe-mode-buttons" class="pe-mode-grid">
+          <button class="pe-mode-btn active" data-mode="view">1 View</button>
+          <button class="pe-mode-btn" data-mode="place">2 Place</button>
+          <button class="pe-mode-btn" data-mode="select">3 Select</button>
+          <button class="pe-mode-btn" data-mode="animate">4 Animate</button>
+        </div>
+
+        <!-- Control Points -->
+        <div class="pe-section-title">CONTROL POINTS</div>
+        <div id="pe-point-list" class="pe-point-list"></div>
+
+        <!-- Path Duration -->
+        <div class="pe-control-group">
+          <div class="pe-slider-row">
+            <div class="pe-slider-header">
+              <span class="pe-slider-label">Path Duration</span>
+              <span class="pe-slider-val" id="pe-duration-val">5.0s</span>
+            </div>
+            <input type="range" id="pe-duration-slider" min="1" max="30" step="0.5" value="5">
+          </div>
+        </div>
+
+        <!-- Dome Camera -->
+        <div class="pe-section-title">DOME CAMERA</div>
+        <div class="pe-control-group">
+          <div class="pe-slider-row">
+            <div class="pe-slider-header">
+              <span class="pe-slider-label">Dome Radius</span>
+              <span class="pe-slider-val" id="pe-cam-dist-val">3.0</span>
+            </div>
+            <input type="range" id="pe-cam-dist-slider" min="0.5" max="15" step="0.1" value="3.0">
+          </div>
+          <div class="pe-slider-row">
+            <div class="pe-slider-header">
+              <span class="pe-slider-label">Azimuth Angle</span>
+              <span class="pe-slider-val" id="pe-cam-az-val">0&deg;</span>
+            </div>
+            <input type="range" id="pe-cam-az-slider" min="0" max="360" step="5" value="0">
+          </div>
+          <div class="pe-slider-row">
+            <div class="pe-slider-header">
+              <span class="pe-slider-label">Elevation Angle</span>
+              <span class="pe-slider-val" id="pe-cam-el-val">15&deg;</span>
+            </div>
+            <input type="range" id="pe-cam-el-slider" min="-30" max="85" step="5" value="15">
+          </div>
+          <label class="pe-checkbox">
+            <input type="checkbox" id="pe-show-cams" checked>
+            Show Frustum Viz
+          </label>
+        </div>
+
+        <!-- Export Settings -->
+        <div class="pe-section-title">EXPORT SETTINGS</div>
+        <div class="pe-control-group">
+          <div class="pe-slider-row">
+            <div class="pe-slider-header">
+              <span class="pe-slider-label">Target FPS</span>
+              <span class="pe-slider-val" id="pe-export-fps-val">30</span>
+            </div>
+            <input type="range" id="pe-export-fps-slider" min="1" max="60" step="1" value="30">
+          </div>
+          <div id="pe-frame-info" class="pe-frame-info">Frames: --</div>
+          <button class="pe-export-btn" id="pe-export-btn">Export Training Dataset</button>
+        </div>
+
+        <!-- Shortcuts -->
+        <div class="pe-section-title">SHORTCUTS</div>
+        <div class="pe-shortcuts">
+          1-4: Switch Modes &bull; Del: Remove Point<br>
+          Space: Play/Stop &bull; Ctrl/Cmd+Z: Undo<br>
+          WASD: Move Camera
+        </div>
+      </div>
+
+      <!-- Bottom Action Bar (inside path tab) -->
+      <div id="pe-action-bar" class="pe-action-bar">
+        <button class="pe-icon-btn" id="pe-btn-save" title="Save Path JSON">&#128190;</button>
+        <button class="pe-icon-btn" id="pe-btn-load" title="Load Path JSON">&#128194;</button>
+        <div class="pe-bar-divider"></div>
+        <button class="pe-icon-btn pe-primary pe-play-btn" id="pe-btn-play" title="Play Animation">&#9654;</button>
+        <button class="pe-icon-btn pe-danger-btn" id="pe-btn-record" title="Record WebM">&#9679;</button>
+        <div class="pe-bar-divider"></div>
+        <button class="pe-icon-btn pe-danger-btn" id="pe-btn-clear" title="Clear All">&#128465;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prompt Bar (bottom center) -->
+  <div id="prompt-bar" class="glass"></div>
+
+  <!-- Message -->
+  <div id="message"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

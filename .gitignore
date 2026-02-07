@@ -68,9 +68,15 @@ tensorboard/
 *.splat
 *.splatv
 *.ply
+*.spz
 
 # Claude Code (local only)
 .claude/
+
+# Local-only planning docs & test assets
+SCENE_COMPOSER_IMPLEMENTATION_PLAN.md
+phase1_plan.md
+temple.png
 
 # Archive (local reference only)
 archive/

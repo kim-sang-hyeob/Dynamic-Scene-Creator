@@ -39,6 +39,14 @@ except ImportError:
     exit(1)
 
 
+SH_C0 = 0.28209479177387814
+
+
+def sh_to_rgb(sh_dc):
+    """Convert SH DC coefficients to RGB [0, 1]."""
+    return np.clip(sh_dc * SH_C0 + 0.5, 0.0, 1.0)
+
+
 def sigmoid(x):
     """Apply sigmoid function."""
     return 1 / (1 + np.exp(-np.clip(x, -20, 20)))
@@ -102,11 +110,12 @@ def process_spz_to_splat(spz_file_path):
         buffer.write(scale.tobytes())
 
         # Color RGBA (uint8[4] = 4 bytes)
-        # colors are [0, 1] range, convert to [0, 255]
+        # colors are SH DC coefficients, convert to RGB via: rgb = sh * SH_C0 + 0.5
+        rgb = sh_to_rgb(colors[i])
         rgba = np.array([
-            colors[i, 0],  # R
-            colors[i, 1],  # G
-            colors[i, 2],  # B
+            rgb[0],        # R
+            rgb[1],        # G
+            rgb[2],        # B
             opacity[i],    # A
         ])
         rgba_uint8 = (rgba * 255).clip(0, 255).astype(np.uint8)
@@ -167,8 +176,11 @@ def process_spz_to_splat_vectorized(spz_file_path):
     # Reorder quaternion (x,y,z,w) -> (w,x,y,z)
     rotations_wxyz = rotations[:, [3, 0, 1, 2]]
 
+    # Convert SH DC coefficients to RGB
+    colors_rgb = sh_to_rgb(colors)
+
     # Prepare RGBA (uint8)
-    rgba = np.column_stack([colors, opacity])
+    rgba = np.column_stack([colors_rgb, opacity])
     rgba_uint8 = (rgba * 255).clip(0, 255).astype(np.uint8)
 
     # Prepare rotation uint8
