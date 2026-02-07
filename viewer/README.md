@@ -184,6 +184,20 @@ python merge_splat_files.py map.splat model.splatv -o merged.splatv
 python merge_splat_files.py map.splat model.splatv -o merged.splatv \
     --lumina-path lumina.json --snap-to-floor
 
+### 6.2 Path Animation
+Animate an object along a path defined in a JSON file (e.g. from Lumina).
+- **Translation Only**: The object slides along the path maintaining its original orientation (no rotation).
+- **Absolute Coordinate System**: The object moves exactly along the coordinates defined in the JSON.
+- **Constant Speed**: The object moves at a constant speed (units/sec).
+- **Play Once & Freeze**: The animation plays from start to end, then freezes at the final position.
+
+```bash
+python viewer/merge_splat_files.py viewer/background.splat viewer/object.splatv \
+  -o viewer/output.splatv \
+  --lumina-path viewer/path.json \
+  --animate \
+  --speed 2.0
+```
 # 수동 위치 조정 (필요한 경우에만)
 python merge_splat_files.py map.splat model.splatv -o merged.splatv \
     --offset 1.5 0.0 -2.0 --scale 0.5
@@ -199,8 +213,9 @@ python merge_splat_files.py map.splat model.splatv -o merged.splatv \
 **추가 옵션 (모두 선택 사항):**
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
-| `--lumina-path` | None | `lumina_path.json` 경로 (바닥 높이 참조용) |
-| `--snap-to-floor` | False | 객체 바닥을 지면에 자동 정렬 (lumina-path 필수) |
+| `--lumina-path` | None | `lumina_path.json` 경로 (바닥 높이 및 경로 참조) |
+| `--snap-to-floor` | False | 객체 바닥을 지면에 자동 정렬 (정적 배치용) |
+| `--animate` | False | 객체가 경로를 따라 이동하며 회전하도록 애니메이션 베이킹 |
 | `--offset X Y Z` | 0 0 0 | 객체 위치 수동 오프셋 |
 | `--scale` | 1.0 | 객체 스케일 |
 | `--rotate X Y Z` | 0 0 0 | 객체 추가 회전 |
