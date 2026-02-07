@@ -579,11 +579,229 @@ def fit_path_motion_coefficients(path_positions, t_values):
     return base_position, linear, quadratic, cubic
 
 
+def compute_path_yaw_params(path_positions, t_values):
+    """
+    Compute yaw angle parameters for path-following rotation.
+
+    Returns yaw angle at center time and angular velocity (linear fit).
+
+    Args:
+        path_positions: array of shape (N, 3) - positions along path
+        t_values: array of parameter values [0, 1]
+
+    Returns:
+        yaw_center: yaw angle at t=0.5 (radians)
+        yaw_rate: angular velocity (radians per unit dt)
+        yaw_angles: all yaw angles for debugging
+    """
+    # Compute tangent vectors
+    tangents = np.zeros_like(path_positions)
+    tangents[0] = path_positions[1] - path_positions[0]
+    tangents[-1] = path_positions[-1] - path_positions[-2]
+    for i in range(1, len(path_positions) - 1):
+        tangents[i] = path_positions[i + 1] - path_positions[i - 1]
+
+    # Normalize tangents
+    norms = np.linalg.norm(tangents, axis=1, keepdims=True)
+    norms[norms < 1e-6] = 1.0
+    tangents = tangents / norms
+
+    # Compute yaw angles from XZ plane tangent
+    # The cat's forward direction is assumed to be +X in local space
+    # We want the cat to face the tangent direction
+    # atan2(z, x) gives angle from +X axis, which is what we need for Y-axis rotation
+    yaw_angles = np.arctan2(-tangents[:, 2], tangents[:, 0])
+
+    # Handle angle wrapping for continuous rotation
+    for i in range(1, len(yaw_angles)):
+        diff = yaw_angles[i] - yaw_angles[i-1]
+        if diff > np.pi:
+            yaw_angles[i:] -= 2 * np.pi
+        elif diff < -np.pi:
+            yaw_angles[i:] += 2 * np.pi
+
+    # Find yaw at t=0.5
+    center_idx = np.argmin(np.abs(t_values - 0.5))
+    yaw_center = yaw_angles[center_idx]
+
+    # Fit linear yaw rate: yaw(t) = yaw_center + yaw_rate * dt
+    dt = t_values - 0.5
+    yaw_deltas = yaw_angles - yaw_center
+
+    # Linear least squares fit
+    if np.abs(dt).sum() > 0:
+        yaw_rate = np.sum(yaw_deltas * dt) / np.sum(dt ** 2)
+    else:
+        yaw_rate = 0.0
+
+    return yaw_center, yaw_rate, yaw_angles
+
+
+def yaw_to_quaternion_wxyz(yaw):
+    """Convert yaw angle (radians) to quaternion [w, x, y, z] for Y-axis rotation."""
+    half_yaw = yaw / 2
+    return np.array([np.cos(half_yaw), 0, np.sin(half_yaw), 0])
+
+
+def apply_path_rotation_to_splatv(texdata, count, yaw_center, yaw_rate, num_samples=20):
+    """
+    Apply Y-axis rotation to entire object for path-following.
+
+    This rotates all Gaussian positions around the object's center point
+    and fits polynomial motion coefficients by sampling at multiple time points.
+    Also rotates each Gaussian's orientation quaternion.
+
+    Args:
+        texdata: splatv texture data (uint32 array)
+        count: number of gaussians
+        yaw_center: yaw angle at t=0.5 (radians)
+        yaw_rate: angular velocity (radians per unit dt)
+        num_samples: number of time samples for polynomial fitting
+    """
+    texdata_f = texdata.view(np.float32)
+    texdata_u32 = texdata.reshape(-1, 16)
+
+    def unpack_halves(packed):
+        low = (packed & 0xFFFF).astype(np.uint16).view(np.float16).astype(np.float32)
+        high = (packed >> 16).astype(np.uint16).view(np.float16).astype(np.float32)
+        return low, high
+
+    def pack_halves(l, h):
+        l_f16 = np.asarray(l).astype(np.float16).view(np.uint16)
+        h_f16 = np.asarray(h).astype(np.float16).view(np.uint16)
+        return l_f16.astype(np.uint32) | (h_f16.astype(np.uint32) << 16)
+
+    flat_view = texdata_f.reshape(-1, 16)
+
+    # 1. Extract all positions and compute object center
+    positions = flat_view[:count, 0:3].copy()
+    object_center = np.mean(positions, axis=0)
+
+    print(f"    Object center (original): {object_center}")
+    print(f"    Yaw center: {np.degrees(yaw_center):.1f}°")
+    print(f"    Yaw rate: {np.degrees(yaw_rate):.1f}°/dt")
+    print(f"    Yaw at t=0: {np.degrees(yaw_center - 0.5 * yaw_rate):.1f}°")
+    print(f"    Yaw at t=1: {np.degrees(yaw_center + 0.5 * yaw_rate):.1f}°")
+
+    # 2. Sample yaw angles at multiple time points for accurate polynomial fitting
+    t_samples = np.linspace(0, 1, num_samples)
+    dt_samples = t_samples - 0.5
+    yaw_samples = yaw_center + yaw_rate * dt_samples
+    center_idx = num_samples // 2
+
+    # 3. Pre-compute rotation quaternion and omega (same for all Gaussians)
+    q_yaw_center = yaw_to_quaternion_wxyz(yaw_center)
+
+    # Sample quaternions and fit omega
+    q_samples = np.array([yaw_to_quaternion_wxyz(y) for y in yaw_samples])
+    q_base = q_samples[center_idx]
+    q_deltas = q_samples - q_base
+
+    # Fit linear omega: q_delta = omega * dt
+    A_design = np.column_stack([dt_samples, dt_samples**2, dt_samples**3])
+    global_omega = np.zeros(4)
+    for dim in range(4):
+        coeffs, _, _, _ = np.linalg.lstsq(A_design[:, 0:1], q_deltas[:, dim:dim+1], rcond=None)
+        global_omega[dim] = coeffs[0, 0]
+
+    print(f"    Global omega: {global_omega}")
+
+    # 4. For each Gaussian, compute rotated positions at all sample times
+    # Pre-compute cos and sin for efficiency
+    cos_yaw_samples = np.cos(yaw_samples)
+    sin_yaw_samples = np.sin(yaw_samples)
+
+    for j in range(count):
+        # Get local position relative to object center
+        x_local = positions[j, 0] - object_center[0]
+        y_local = positions[j, 1] - object_center[1]
+        z_local = positions[j, 2] - object_center[2]
+
+        # Compute rotated positions at all sample times
+        x_samples = x_local * cos_yaw_samples + z_local * sin_yaw_samples
+        z_samples = -x_local * sin_yaw_samples + z_local * cos_yaw_samples
+
+        # Find position at t=0.5 (center)
+        x_base = x_samples[center_idx]
+        z_base = z_samples[center_idx]
+
+        # Compute offsets from center position
+        x_offsets = x_samples - x_base
+        z_offsets = z_samples - z_base
+
+        # Fit polynomial: offset = linear*dt + quad*dt² + cubic*dt³
+        x_coeffs, _, _, _ = np.linalg.lstsq(A_design, x_offsets, rcond=None)
+        z_coeffs, _, _, _ = np.linalg.lstsq(A_design, z_offsets, rcond=None)
+
+        # New base position (rotated, centered at origin)
+        flat_view[j, 0] = x_base
+        flat_view[j, 1] = y_local
+        flat_view[j, 2] = z_base
+
+        # Add rotation-induced motion to existing motion coefficients
+        m0, m1 = unpack_halves(texdata_u32[j, 8])      # linear x, y
+        m2, m3 = unpack_halves(texdata_u32[j, 9])      # linear z, quad x
+        m4, m5 = unpack_halves(texdata_u32[j, 10])     # quad y, z
+        m6, m7 = unpack_halves(texdata_u32[j, 11])     # cubic x, y
+        m8, _ = unpack_halves(texdata_u32[j, 12])      # cubic z
+
+        m0 += x_coeffs[0]  # linear x
+        m2 += z_coeffs[0]  # linear z
+        m3 += x_coeffs[1]  # quad x
+        m5 += z_coeffs[1]  # quad z
+        m6 += x_coeffs[2]  # cubic x
+        m8 += z_coeffs[2]  # cubic z
+
+        texdata_u32[j, 8] = pack_halves(m0, m1)
+        texdata_u32[j, 9] = pack_halves(m2, m3)
+        texdata_u32[j, 10] = pack_halves(m4, m5)
+        texdata_u32[j, 11] = pack_halves(m6, m7)
+        texdata_u32[j, 12] = pack_halves(m8, 0)
+
+        # 4. Rotate the Gaussian's base orientation quaternion
+        rw, rx = unpack_halves(texdata_u32[j, 3])
+        ry, rz = unpack_halves(texdata_u32[j, 4])
+
+        pw, px, py, pz = q_yaw_center
+
+        new_w = pw * rw - px * rx - py * ry - pz * rz
+        new_x = pw * rx + px * rw + py * rz - pz * ry
+        new_y = pw * ry - px * rz + py * rw + pz * rx
+        new_z = pw * rz + px * ry - py * rx + pz * rw
+
+        norm = np.sqrt(new_w**2 + new_x**2 + new_y**2 + new_z**2)
+        if norm > 1e-6:
+            new_w /= norm
+            new_x /= norm
+            new_y /= norm
+            new_z /= norm
+
+        texdata_u32[j, 3] = pack_halves(new_w, new_x)
+        texdata_u32[j, 4] = pack_halves(new_y, new_z)
+
+        # 5. Apply pre-computed global omega (same for all Gaussians)
+        ow, ox = unpack_halves(texdata_u32[j, 13])
+        oy, oz = unpack_halves(texdata_u32[j, 14])
+
+        ow += global_omega[0]
+        ox += global_omega[1]
+        oy += global_omega[2]
+        oz += global_omega[3]
+
+        texdata_u32[j, 13] = pack_halves(ow, ox)
+        texdata_u32[j, 14] = pack_halves(oy, oz)
+
+    # Verify new center
+    new_positions = flat_view[:count, 0:3]
+    new_center = np.mean(new_positions, axis=0)
+    print(f"    New object center: {new_center}")
+
+
 def add_path_motion_to_splatv(texdata, count, path_base_offset, path_linear, path_quadratic, path_cubic):
     """
-    Add path motion coefficients to existing splatv motion data.
+    Add path translation motion to existing splatv motion data.
 
-    This modifies the texdata in-place, adding the path motion on top of
+    This modifies the texdata in-place, adding the path translation on top of
     the object's internal motion (e.g., cat walking animation).
 
     Args:
@@ -610,17 +828,35 @@ def add_path_motion_to_splatv(texdata, count, path_base_offset, path_linear, pat
 
     # Add offset to base positions
     flat_view = texdata_f.reshape(-1, 16)
+
+    # Debug: show before state
+    old_center = np.mean(flat_view[:count, 0:3], axis=0)
+    print(f"    Before path offset, center at: {old_center}")
+    print(f"    Adding path_base_offset: {path_base_offset}")
+
     flat_view[:count, 0] += path_base_offset[0]
     flat_view[:count, 1] += path_base_offset[1]
     flat_view[:count, 2] += path_base_offset[2]
 
-    # Unpack existing motion coefficients and add path motion
-    # Motion layout in texdata (indices 8-14 in uint32 view):
+    # Debug: show after state
+    new_center = np.mean(flat_view[:count, 0:3], axis=0)
+    print(f"    After path offset, center at: {new_center}")
+
+    # Texture layout per gaussian (16 uint32 values):
+    # [0-2]: position (float32 x, y, z)
+    # [3]: rotation x, y (packed half)
+    # [4]: rotation z, w (packed half)
+    # [5]: scale x, y (packed half)
+    # [6]: scale z, 0 (packed half)
+    # [7]: RGBA (uint8 x 4)
     # [8]: motion_0, motion_1 (linear x, y)
     # [9]: motion_2, motion_3 (linear z, quadratic x)
     # [10]: motion_4, motion_5 (quadratic y, z)
     # [11]: motion_6, motion_7 (cubic x, y)
     # [12]: motion_8, 0 (cubic z, padding)
+    # [13]: omega_0, omega_1 (rotation delta x, y)
+    # [14]: omega_2, omega_3 (rotation delta z, w)
+    # [15]: trbf_center, trbf_scale (packed half)
 
     for j in range(count):
         # Unpack existing motion
@@ -694,6 +930,10 @@ Examples:
     parser.add_argument("--lumina-path", help="Path to lumina_path.json to extract position offset")
     parser.add_argument("--animate", action="store_true",
                         help="Animate object along the path defined in lumina-path")
+    parser.add_argument("--rotate-along-path", action="store_true",
+                        help="Rotate object to face the path direction while animating")
+    parser.add_argument("--yaw-offset", type=float, default=0.0,
+                        help="Additional yaw offset in degrees for path rotation (default: 0)")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="Animation speed multiplier (default: 1.0)")
 
@@ -753,15 +993,42 @@ Examples:
                         print(f"    Quadratic: {path_quad}")
                         print(f"    Cubic: {path_cubic}")
 
+                        # Compute rotation along path if requested
+                        yaw_center = None
+                        yaw_rate = None
+                        if args.rotate_along_path:
+                            yaw_center, yaw_rate, yaw_angles = compute_path_yaw_params(path_positions, t_values)
+
+                            # Apply user-specified yaw offset
+                            yaw_offset_rad = np.radians(args.yaw_offset)
+                            yaw_center += yaw_offset_rad
+                            yaw_angles = yaw_angles + yaw_offset_rad
+
+                            print(f"\n  Path rotation (Y-axis):")
+                            print(f"    Yaw offset: {args.yaw_offset}°")
+                            print(f"    Yaw at t=0: {np.degrees(yaw_angles[0]):.1f}°")
+                            print(f"    Yaw at t=0.5: {np.degrees(yaw_center):.1f}°")
+                            print(f"    Yaw at t=1: {np.degrees(yaw_angles[-1]):.1f}°")
+                            print(f"    Yaw rate: {np.degrees(yaw_rate):.1f}°/dt")
+                            print(f"    Total rotation: {np.degrees(yaw_angles[-1] - yaw_angles[0]):.1f}°")
+
                         # Store for later application
-                        path_animation_data = (path_base, path_linear, path_quad, path_cubic)
+                        path_animation_data = (path_base, path_linear, path_quad, path_cubic, yaw_center, yaw_rate)
 
                         # For snap-to-floor, use the Y value at path center
                         lumina_target_y = path_base[1]
 
                         # Don't add offset here - it will be added via motion coefficients
-                        print(f"\n  Path start: {control_points[0]}")
-                        print(f"  Path end: {control_points[-1]}")
+                        # Verify path endpoints
+                        expected_start = path_base + path_linear * (-0.5) + path_quad * 0.25 + path_cubic * (-0.125)
+                        expected_end = path_base + path_linear * 0.5 + path_quad * 0.25 + path_cubic * 0.125
+
+                        print(f"\n  Path control points:")
+                        print(f"    Start (t=0): {control_points[0]}")
+                        print(f"    End (t=1): {control_points[-1]}")
+                        print(f"  Fitted path endpoints:")
+                        print(f"    Start (t=0): {expected_start}")
+                        print(f"    End (t=1): {expected_end}")
                         print(f"  Path length: {np.linalg.norm(np.diff(path_positions, axis=0), axis=1).sum():.2f} units")
                     else:
                         # Static placement mode (original behavior)
@@ -797,10 +1064,10 @@ Examples:
 
             if path_animation_data is not None:
                 # In path animation mode, adjust the path base position
-                path_base, path_linear, path_quad, path_cubic = path_animation_data
+                path_base, path_linear, path_quad, path_cubic, yaw_center, yaw_rate = path_animation_data
                 path_base = path_base.copy()
                 path_base[1] += snap_adjustment
-                path_animation_data = (path_base, path_linear, path_quad, path_cubic)
+                path_animation_data = (path_base, path_linear, path_quad, path_cubic, yaw_center, yaw_rate)
                 print(f"  Adjusted path base Y: {path_base[1]:.4f}")
             else:
                 # Static placement mode
@@ -865,25 +1132,30 @@ Examples:
 
     # Apply path animation if enabled
     if path_animation_data is not None and obj_file.suffix.lower() == '.splatv':
-        path_base, path_linear, path_quad, path_cubic = path_animation_data
-
-        # Apply speed multiplier to motion coefficients
-        # Higher speed = faster motion = larger coefficients
-        speed = args.speed
-        path_linear_scaled = path_linear * speed
-        path_quad_scaled = path_quad * speed
-        path_cubic_scaled = path_cubic * speed
+        path_base, path_linear, path_quad, path_cubic, yaw_center, yaw_rate = path_animation_data
 
         print(f"\n[Applying Path Animation]")
-        print(f"  Speed: {speed}x")
+        print(f"  Rotation along path: {yaw_center is not None}")
+        print(f"  Full path traversal (speed controlled by viewer)")
 
+        # First apply rotation if enabled (this modifies positions and adds rotation motion)
+        if yaw_center is not None and yaw_rate is not None:
+            print(f"\n  Applying Y-axis rotation to object:")
+            apply_path_rotation_to_splatv(
+                obj_texdata,
+                obj_count,
+                yaw_center,
+                yaw_rate
+            )
+
+        # Add path translation (full path, no scaling)
         add_path_motion_to_splatv(
             obj_texdata,
             obj_count,
             path_base,
-            path_linear_scaled,
-            path_quad_scaled,
-            path_cubic_scaled
+            path_linear,
+            path_quad,
+            path_cubic
         )
 
         print(f"  Path motion applied to {obj_count:,} gaussians")
