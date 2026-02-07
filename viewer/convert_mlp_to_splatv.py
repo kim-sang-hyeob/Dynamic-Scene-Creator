@@ -1,7 +1,7 @@
 """
-Convert SC4D MLP-based 4DGS model to splaTV format.
+Convert MLP-based 4DGS model to splatv format.
 
-SC4D uses an MLP (TimeNet) to predict position/rotation deltas based on
+MLP-based 4DGS uses a TimeNet MLP to predict position/rotation deltas based on
 position and time. This script samples the MLP at multiple time points
 and fits polynomial motion parameters for the splatv format.
 
@@ -531,8 +531,8 @@ def write_splatv(output_path, base_positions, base_rotations, scales, rgb, opaci
 
 
 # ==================== Main Conversion ====================
-def convert_sc4d_to_splatv(model_dir, output_path, num_samples=30, iteration=None, rotate_args=None):
-    """Convert SC4D MLP-based 4DGS to splatv format."""
+def convert_mlp_to_splatv(model_dir, output_path, num_samples=30, iteration=None):
+    """Convert MLP-based 4DGS to splatv format."""
 
     # Determine file paths
     if iteration:
@@ -627,7 +627,7 @@ def convert_sc4d_to_splatv(model_dir, output_path, num_samples=30, iteration=Non
 
 
 def main():
-    parser = ArgumentParser(description="Convert SC4D MLP-based 4DGS to splaTV format")
+    parser = ArgumentParser(description="Convert MLP-based 4DGS to splatv format")
     parser.add_argument("--model_dir", type=str, required=True,
                         help="Directory containing point_cloud.ply, point_cloud_c.ply, timenet.pth")
     parser.add_argument("--output", type=str, required=True,
@@ -641,7 +641,7 @@ def main():
 
     args = parser.parse_args()
 
-    convert_sc4d_to_splatv(
+    convert_mlp_to_splatv(
         args.model_dir,
         args.output,
         args.num_samples,
