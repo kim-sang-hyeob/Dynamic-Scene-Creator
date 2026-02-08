@@ -10,10 +10,11 @@ export class PromptBar {
   constructor(sceneManager, controls, config = {}) {
     this.sceneManager = sceneManager;
     this.controls = controls;
-    // Connect to TRELLIS server directly (same host, port 8000)
-    this.serverUrl = config.trellisServerUrl || `http://${window.location.hostname}:8000`;
+    // Connect to TRELLIS via proxy (/api/* → localhost:8000)
+    this.serverUrl = config.trellisServerUrl || '/api';
     this.isGenerating = false;
     this.currentImage = null;
+    this._timerInterval = null;
 
     this.settings = {
       sparseSteps: 12,
@@ -42,13 +43,17 @@ export class PromptBar {
     this.container.innerHTML = `
       <div class="image-preview" style="display:none">
         <img class="preview-thumb" />
-        <span class="preview-name"></span>
+        <div class="preview-info">
+          <span class="preview-name"></span>
+          <span class="preview-size"></span>
+        </div>
         <button class="preview-close" title="Remove image">&times;</button>
       </div>
       <div class="prompt-main">
         <button class="prompt-btn camera-btn" title="Upload image">&#x1f4f7;</button>
         <input type="file" class="image-input" accept="image/*" hidden />
         <input type="text" class="prompt-input" placeholder="Imagine an object..." />
+        <button class="prompt-btn map-btn" title="Generate Map (World Labs)">&#x1f30d; Map</button>
         <button class="prompt-btn settings-btn" title="Settings">&#x2699;&#xfe0f;</button>
         <button class="prompt-btn create-btn" title="Generate 3D">&#x2728; Create</button>
       </div>
@@ -114,6 +119,66 @@ export class PromptBar {
     // Prevent gizmo shortcuts when typing
     this.textInput.onfocus = () => { window._promptBarFocused = true; };
     this.textInput.onblur = () => { window._promptBarFocused = false; };
+
+    // Image drag-and-drop directly on the prompt bar
+    this._setupDragDrop();
+  }
+
+  // ── Drag-and-drop on prompt bar ────────────────────────────────────
+
+  _setupDragDrop() {
+    let dragCounter = 0;
+
+    this.container.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter++;
+      // Only highlight for image files
+      if (this._hasImageFile(e)) {
+        this.container.classList.add('drag-over');
+      }
+    });
+
+    this.container.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    this.container.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        this.container.classList.remove('drag-over');
+      }
+    });
+
+    this.container.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter = 0;
+      this.container.classList.remove('drag-over');
+
+      const files = Array.from(e.dataTransfer.files);
+      const imageFile = files.find(f => f.type.startsWith('image/'));
+      if (imageFile) {
+        this.setImage(imageFile);
+      }
+    });
+  }
+
+  _hasImageFile(e) {
+    if (e.dataTransfer.types.includes('Files')) {
+      const items = e.dataTransfer.items;
+      if (items) {
+        for (const item of items) {
+          if (item.type.startsWith('image/')) return true;
+        }
+      }
+      return true; // Can't check types during dragenter in some browsers
+    }
+    return false;
   }
 
   // ── Image handling ──────────────────────────────────────────────────
@@ -123,8 +188,9 @@ export class PromptBar {
     const url = URL.createObjectURL(file);
     this.previewArea.querySelector('.preview-thumb').src = url;
     this.previewArea.querySelector('.preview-name').textContent = file.name;
+    this.previewArea.querySelector('.preview-size').textContent = this._formatSize(file.size);
     this.previewArea.style.display = 'flex';
-    this.textInput.placeholder = 'Image mode — click Create to generate';
+    this.textInput.placeholder = 'Add description (optional)...';
   }
 
   clearImage() {
@@ -135,6 +201,12 @@ export class PromptBar {
     this.previewArea.style.display = 'none';
     this.textInput.placeholder = 'Imagine an object...';
     this.imageInput.value = '';
+  }
+
+  _formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
   toggleSettings() {
@@ -248,6 +320,38 @@ export class PromptBar {
       parsed = parseSplatBuffer(buffer);
     }
 
+    // Normalize: compute bounding box → scale so longest axis = 1.0
+    const positions = parsed.positions;
+    const count = parsed.count;
+    if (count > 0) {
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (let i = 0; i < count; i++) {
+        const px = positions[3 * i], py = positions[3 * i + 1], pz = positions[3 * i + 2];
+        if (px < minX) minX = px; if (px > maxX) maxX = px;
+        if (py < minY) minY = py; if (py > maxY) maxY = py;
+        if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+      }
+      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
+      const ex = maxX - minX, ey = maxY - minY, ez = maxZ - minZ;
+      const maxExtent = Math.max(ex, ey, ez, 0.001);
+      const normScale = 1.0 / maxExtent;
+
+      // Recenter and scale positions + texdata position slots
+      const texdata_f = new Float32Array(parsed.texdata.buffer);
+      for (let i = 0; i < count; i++) {
+        const nx = (positions[3 * i] - cx) * normScale;
+        const ny = (positions[3 * i + 1] - cy) * normScale;
+        const nz = (positions[3 * i + 2] - cz) * normScale;
+        positions[3 * i] = nx;
+        positions[3 * i + 1] = ny;
+        positions[3 * i + 2] = nz;
+        texdata_f[16 * i + 0] = nx;
+        texdata_f[16 * i + 1] = ny;
+        texdata_f[16 * i + 2] = nz;
+      }
+    }
+
     // Place at camera forward 3m
     const viewMatrix = this.controls.getViewMatrix();
     const inv = invert4(viewMatrix);
@@ -273,11 +377,36 @@ export class PromptBar {
 
   setLoading(isLoading, message = '') {
     this.isGenerating = isLoading;
-    this.createBtn.disabled = isLoading;
     this.textInput.disabled = isLoading;
     this.progressBar.style.display = isLoading ? 'block' : 'none';
-    if (message) this.textInput.placeholder = message;
-    else this.textInput.placeholder = this.currentImage ? 'Image mode — click Create' : 'Imagine an object...';
+
+    if (isLoading) {
+      this.container.classList.add('generating');
+      // Button → spinner + "Generating..."
+      this.createBtn.disabled = true;
+      this.createBtn.innerHTML = '<span class="btn-spinner"></span>Generating...';
+
+      // Start elapsed timer
+      this._loadingStartTime = Date.now();
+      if (this._timerInterval) clearInterval(this._timerInterval);
+      this._timerInterval = setInterval(() => {
+        const elapsed = ((Date.now() - this._loadingStartTime) / 1000).toFixed(0);
+        this.textInput.placeholder = `${message} (${elapsed}s)`;
+      }, 1000);
+      if (message) this.textInput.placeholder = message;
+    } else {
+      this.container.classList.remove('generating');
+      // Restore button
+      this.createBtn.disabled = false;
+      this.createBtn.innerHTML = '&#x2728; Create';
+
+      // Stop timer
+      if (this._timerInterval) {
+        clearInterval(this._timerInterval);
+        this._timerInterval = null;
+      }
+      this.textInput.placeholder = this.currentImage ? 'Add description (optional)...' : 'Imagine an object...';
+    }
   }
 
   showToast(message, type = 'success') {
@@ -285,10 +414,11 @@ export class PromptBar {
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
     document.body.appendChild(toast);
-    requestAnimationFrame(() => { toast.style.opacity = '1'; toast.style.transform = 'translateY(0)'; });
+    requestAnimationFrame(() => {
+      toast.classList.add('show');
+    });
     setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateY(10px)';
+      toast.classList.remove('show');
       setTimeout(() => toast.remove(), 300);
     }, 3000);
   }

@@ -13,8 +13,11 @@ import { UndoManager } from './undo-manager.js';
 import { getViewMatrix } from './utils/matrix-math.js';
 import { parseSplatBuffer, parsePlyBuffer, parseSplatvBuffer, detectFormat } from './utils/splat-loader.js';
 import { PromptBar } from './prompt-bar.js';
+import { WorldLabsModal } from './worldlabs-modal.js';
 import { PathEditor } from './path-editor/path-editor.js';
 import { PathEditorPanel } from './path-editor-panel.js';
+import { DirectManip } from './direct-manip.js';
+import { SelectionBox } from './selection-box.js';
 
 // ── Globals ──────────────────────────────────────────────────────────
 let renderer;
@@ -24,8 +27,11 @@ let layerPanel;
 let gizmo;
 let undoManager;
 let promptBar;
+let worldLabsModal;
 let pathEditor;
 let pathEditorPanel;
+let directManip;
+let selectionBox;
 
 // ── Init ─────────────────────────────────────────────────────────────
 function init() {
@@ -47,40 +53,98 @@ function init() {
   // Scene Manager
   sceneManager = new SceneManager(renderer);
 
+  // Re-show empty state when all layers removed + toggle Map button visibility
+  // (must be before LayerPanel onChange chain)
+  sceneManager.onChange = (event, data) => {
+    if (event === 'removeLayer' && sceneManager.layers.length === 0) {
+      document.getElementById('drop-zone')?.classList.add('empty');
+    }
+    // Show/hide Map button based on whether a map layer exists
+    const mapBtn = document.querySelector('#prompt-bar .map-btn');
+    if (mapBtn) {
+      mapBtn.style.display = sceneManager.hasMap() ? 'none' : '';
+    }
+  };
+
   // Undo Manager
   undoManager = new UndoManager(sceneManager);
 
-  // Gizmo
+  // Gizmo (auxiliary — hidden by default, shown via G/R/S keys or buttons)
   gizmo = new Gizmo(renderer, sceneManager, controls);
   gizmo.init();
   gizmo.undoManager = undoManager;
+
+  // Direct Manipulation (primary interaction)
+  directManip = new DirectManip(renderer, sceneManager, controls);
+  directManip.undoManager = undoManager;
+
+  // Selection Box (AABB wireframe around selected object)
+  selectionBox = new SelectionBox(renderer, sceneManager);
+  selectionBox.init();
+
+  // Gizmo mode buttons (top HUD) — clicking shows gizmo
+  document.getElementById('gizmo-modes')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.gizmo-mode-btn');
+    if (btn && btn.dataset.mode) {
+      gizmo.setMode(btn.dataset.mode); // setMode sets visible=true
+    }
+  });
 
   // Path Editor
   pathEditor = new PathEditor(renderer, sceneManager, controls);
   pathEditor.init();
   pathEditorPanel = new PathEditorPanel(pathEditor);
 
-  // Wire overlay rendering (gizmo + path editor, chained)
+  // Wire overlay rendering (selection box → gizmo → path editor)
   renderer.onAfterDraw = (viewMatrix, projMatrix) => {
+    selectionBox.render(viewMatrix, projMatrix);
     gizmo.render(viewMatrix, projMatrix);
     pathEditor.render(viewMatrix, projMatrix);
   };
 
-  // Wire click handling (gizmo first, then path editor)
+  // ── Mouse Event Wiring ──────────────────────────────────────────────
+  // Priority: gizmo (when visible) → directManip → path editor → camera
+  let bgClickStart = null;
+
   controls.onLeftClick = (clientX, clientY, event) => {
-    if (gizmo.handleClick(clientX, clientY, event)) return true;
-    if (pathEditor.handleClick(clientX, clientY, event)) return true;
+    bgClickStart = { x: clientX, y: clientY };
+    if (pathEditor.active) {
+      if (pathEditor.handleClick(clientX, clientY, event)) { bgClickStart = null; return true; }
+      return false;
+    }
+    if (gizmo.visible && gizmo.handleClick(clientX, clientY, event)) { bgClickStart = null; return true; }
+    if (directManip.handleMouseDown(clientX, clientY, event)) { bgClickStart = null; return true; }
     return false;
   };
 
-  // Wire mousemove and mouseup (both gizmo and path editor)
+  controls.onRightClick = (clientX, clientY, event) => {
+    if (pathEditor.active) return false;
+    return directManip.handleMouseDown(clientX, clientY, event);
+  };
+
+  controls.onWheel = (clientX, clientY, deltaY, shiftKey, event) => {
+    if (pathEditor.active) return false;
+    return directManip.handleWheel(clientX, clientY, deltaY, shiftKey);
+  };
+
   canvas.addEventListener('mousemove', (e) => {
     gizmo.handleMouseMove(e.clientX, e.clientY, e);
+    directManip.handleMouseMove(e.clientX, e.clientY, e);
     pathEditor.handleMouseMove(e.clientX, e.clientY, e);
   });
   canvas.addEventListener('mouseup', (e) => {
     gizmo.handleMouseUp(e.clientX, e.clientY, e);
+    directManip.handleMouseUp(e.clientX, e.clientY, e);
     pathEditor.handleMouseUp(e.clientX, e.clientY, e);
+    // Empty space short click → deselect
+    if (bgClickStart && e.button === 0) {
+      const dx = e.clientX - bgClickStart.x, dy = e.clientY - bgClickStart.y;
+      if (dx * dx + dy * dy < 25) {
+        sceneManager.selectLayer(null);
+        gizmo.hide();
+      }
+      bgClickStart = null;
+    }
   });
 
   // Layer Panel
@@ -101,6 +165,13 @@ function init() {
 
   // Prompt Bar
   promptBar = new PromptBar(sceneManager, controls);
+
+  // World Labs Modal (Map generation)
+  worldLabsModal = new WorldLabsModal(sceneManager, controls);
+
+  // Wire Map button in prompt bar to open World Labs modal
+  const mapBtn = document.querySelector('#prompt-bar .map-btn');
+  if (mapBtn) mapBtn.onclick = () => worldLabsModal.open();
 
   // Render loop
   renderer.startLoop(() => {
@@ -124,11 +195,29 @@ function init() {
   setupClipboardPaste();
 
   // Expose for console debugging
-  window.sceneComposer = { renderer, controls, sceneManager, layerPanel, gizmo, undoManager, promptBar, pathEditor, pathEditorPanel, loadFileAsLayer };
+  window.sceneComposer = { renderer, controls, sceneManager, layerPanel, gizmo, directManip, selectionBox, undoManager, promptBar, worldLabsModal, pathEditor, pathEditorPanel, loadFileAsLayer };
+
+  // Help overlay — close on backdrop click or close button
+  const helpOverlay = document.getElementById('help-overlay');
+  if (helpOverlay) {
+    helpOverlay.addEventListener('click', (e) => {
+      if (e.target === helpOverlay) helpOverlay.style.display = 'none';
+    });
+    document.getElementById('help-close-btn')?.addEventListener('click', () => {
+      helpOverlay.style.display = 'none';
+    });
+  }
+
+  // Hint bubble — auto-hide after 5 seconds
+  setTimeout(() => {
+    const h = document.getElementById('hint-bubble');
+    if (h) { h.classList.add('hidden'); setTimeout(() => h.remove(), 600); }
+  }, 5000);
 
   console.log('Scene Composer initialized');
   console.log('Tip: drop .splat/.ply/.splatv files to add layers');
-  console.log('Shortcuts: G=Translate, R=Rotate, S=Scale, Esc=Deselect, Del=Delete, Ctrl+Z/Y=Undo/Redo');
+  console.log('Direct: Drag=Move, Alt+Drag=Height, RightDrag=Rotate, Scroll=Scale');
+  console.log('Gizmo: G=Translate, R=Rotate, Esc=Deselect, Del=Delete, Ctrl+Z/Y=Undo/Redo');
   console.log('Path Editor: Switch to "Path" tab in sidebar. 1-4=Modes, Space=Play');
 }
 
@@ -189,6 +278,14 @@ function setupKeyboard() {
 
     if (!keyDownTime[e.code]) keyDownTime[e.code] = Date.now();
 
+    // ? key — toggle help overlay
+    if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) {
+      e.preventDefault();
+      const helpEl = document.getElementById('help-overlay');
+      if (helpEl) helpEl.style.display = helpEl.style.display === 'none' ? 'flex' : 'none';
+      return;
+    }
+
     // Space — toggle path animation (if path editor active)
     if (e.code === 'Space' && pathEditor.active) {
       e.preventDefault();
@@ -216,9 +313,39 @@ function setupKeyboard() {
       }
     }
 
-    // Esc — deselect (immediate, no keyup delay)
+    // Esc — close help overlay first, then hide gizmo + deselect
     if (e.code === 'Escape') {
-      gizmo.deselect();
+      const helpEl = document.getElementById('help-overlay');
+      if (helpEl && helpEl.style.display !== 'none') {
+        helpEl.style.display = 'none';
+        return;
+      }
+      gizmo.hide();
+      sceneManager.selectLayer(null);
+    }
+
+    // Arrow key nudge — move selected object instead of camera
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown'].includes(e.code)) {
+      const selected = sceneManager.getSelectedLayer();
+      if (selected && !selected.locked) {
+        e.preventDefault();
+        const step = e.shiftKey ? 0.5 : 0.1;
+        const pos = [...selected.position];
+        switch (e.code) {
+          case 'ArrowUp':    pos[2] -= step; break;  // Z-
+          case 'ArrowDown':  pos[2] += step; break;  // Z+
+          case 'ArrowLeft':  pos[0] -= step; break;  // X-
+          case 'ArrowRight': pos[0] += step; break;  // X+
+          case 'PageUp':     pos[1] += step; break;  // Y+
+          case 'PageDown':   pos[1] -= step; break;  // Y-
+        }
+        sceneManager.setPosition(selected.id, pos);
+        // Remove from camera activeKeys so camera doesn't also move
+        controls.activeKeys = controls.activeKeys.filter(
+          k => !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(k)
+        );
+        return;
+      }
     }
 
     // Delete — path editor point or layer
@@ -236,7 +363,9 @@ function setupKeyboard() {
     }
   });
 
-  // Mode switching on keyup (short press < 300ms to avoid WASD conflict)
+  // Mode switching on keyup (short press < 300ms)
+  // NOTE: S key removed — it conflicts with WASD backward.
+  // Use the mode buttons in the top HUD or G/R shortcuts instead.
   window.addEventListener('keyup', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
@@ -253,11 +382,12 @@ function setupKeyboard() {
           case 'Digit4': pathEditor.setMode('animate'); return;
         }
       }
-      // Gizmo mode shortcuts
-      switch (e.code) {
-        case 'KeyG': gizmo.setMode('translate'); break;
-        case 'KeyR': gizmo.setMode('rotate'); break;
-        case 'KeyS': gizmo.setMode('scale'); break;
+      // Gizmo mode shortcuts (show gizmo only when a layer is selected)
+      if (sceneManager.getSelectedLayer()) {
+        switch (e.code) {
+          case 'KeyG': gizmo.show('translate'); break;
+          case 'KeyR': gizmo.show('rotate'); break;
+        }
       }
     }
   });
@@ -280,6 +410,9 @@ function setupDragDrop(spinnerEl, progressEl, dropZone) {
   document.addEventListener("drop", async (e) => {
     preventDefault(e);
     if (dropZone) dropZone.classList.remove('active');
+
+    // Don't handle drops that landed on the prompt bar (it handles images itself)
+    if (e.target.closest('#prompt-bar')) return;
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;

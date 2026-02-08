@@ -4,6 +4,7 @@ pydantic>=2.0
 pydantic-settings>=2.0
 numpy
 Pillow
+httpx>=0.24.0
 # TRELLIS (only needed for real mode):
 # torch>=2.0
 # trellis @ git+https://github.com/microsoft/TRELLIS.git

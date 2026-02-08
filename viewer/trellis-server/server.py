@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from trellis_wrapper import TrellisGenerator
+from worldlabs_wrapper import WorldLabsGenerator
 from config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -68,9 +69,27 @@ class GenerateResponse(BaseModel):
     error: Optional[str] = None
 
 
+# --- World Labs models ---
+
+class GenerateMapRequest(BaseModel):
+    prompt_type: Literal["text", "image"] = "text"
+    prompt_text: Optional[str] = None
+    prompt_image: Optional[str] = None  # base64 encoded
+    seed: int = -1
+
+
+class GenerateMapResponse(BaseModel):
+    status: str
+    splat_data: Optional[str] = None  # base64 encoded .splat
+    gaussian_count: int = 0
+    generation_time: float = 0.0
+    error: Optional[str] = None
+
+
 # --- Global state ---
 
 generator: Optional[TrellisGenerator] = None
+worldlabs_generator: Optional[WorldLabsGenerator] = None
 generation_lock = asyncio.Lock()
 
 
@@ -78,10 +97,16 @@ generation_lock = asyncio.Lock()
 
 @app.on_event("startup")
 async def startup():
-    global generator
+    global generator, worldlabs_generator
     logger.info("Loading TRELLIS model...")
     generator = TrellisGenerator(settings)
     logger.info(f"TRELLIS ready (mock={generator.is_mock})")
+
+    if settings.worldlabs_api_key:
+        worldlabs_generator = WorldLabsGenerator(settings.worldlabs_api_key)
+        logger.info("World Labs generator initialized")
+    else:
+        logger.info("World Labs API key not set (TRELLIS_WORLDLABS_API_KEY) — map generation disabled")
 
 
 @app.get("/health")
@@ -91,6 +116,7 @@ async def health():
         "model_loaded": generator is not None,
         "mock_mode": generator.is_mock if generator else True,
         "gpu_available": generator.check_gpu() if generator else False,
+        "worldlabs_available": worldlabs_generator is not None,
     }
 
 
@@ -145,6 +171,42 @@ async def generate(request: GenerateRequest):
         except Exception as e:
             logger.error(f"Generation failed: {e}", exc_info=True)
             return GenerateResponse(status="error", error=str(e))
+
+
+@app.post("/generate-map", response_model=GenerateMapResponse)
+async def generate_map(request: GenerateMapRequest):
+    if worldlabs_generator is None:
+        return GenerateMapResponse(
+            status="error",
+            error="World Labs API key not configured. Set TRELLIS_WORLDLABS_API_KEY env var.",
+        )
+
+    if request.prompt_type == "text" and not request.prompt_text:
+        raise HTTPException(400, "prompt_text required for text mode")
+    if request.prompt_type == "image" and not request.prompt_image:
+        raise HTTPException(400, "prompt_image required for image mode")
+
+    async with generation_lock:
+        try:
+            prompt_data = request.prompt_text if request.prompt_type == "text" else request.prompt_image
+            result = await asyncio.to_thread(
+                worldlabs_generator.generate_map,
+                request.prompt_type,
+                prompt_data,
+                seed=request.seed,
+            )
+
+            splat_base64 = base64.b64encode(result["splat_bytes"]).decode()
+
+            return GenerateMapResponse(
+                status="success",
+                splat_data=splat_base64,
+                gaussian_count=result["gaussian_count"],
+                generation_time=result["generation_time"],
+            )
+        except Exception as e:
+            logger.error(f"Map generation failed: {e}", exc_info=True)
+            return GenerateMapResponse(status="error", error=str(e))
 
 
 if __name__ == "__main__":

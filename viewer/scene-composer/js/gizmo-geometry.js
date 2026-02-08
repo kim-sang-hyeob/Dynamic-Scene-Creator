@@ -10,6 +10,10 @@ export const AXIS_COLORS = {
   y: [0.25, 0.85, 0.25, 1.0],
   z: [0.35, 0.5, 1.0, 1.0],
   center: [1.0, 1.0, 0.3, 1.0],
+  // Plane handles (semi-transparent, colored by normal axis)
+  xz: [0.25, 0.85, 0.25, 0.35],
+  xy: [0.35, 0.5, 1.0, 0.35],
+  yz: [1.0, 0.25, 0.25, 0.35],
 };
 
 export const AXIS_COLORS_HIGHLIGHT = {
@@ -17,6 +21,9 @@ export const AXIS_COLORS_HIGHLIGHT = {
   y: [0.5, 1.0, 0.5, 1.0],
   z: [0.6, 0.75, 1.0, 1.0],
   center: [1.0, 1.0, 0.7, 1.0],
+  xz: [0.4, 1.0, 0.4, 0.55],
+  xy: [0.5, 0.7, 1.0, 0.55],
+  yz: [1.0, 0.5, 0.5, 0.55],
 };
 
 const AXES = [
@@ -38,7 +45,7 @@ const AXES = [
  */
 export function buildTranslateGizmo(center, axisLen, coneLen, coneRadius, segments) {
   coneLen = coneLen || axisLen * 0.18;
-  coneRadius = coneRadius || axisLen * 0.06;
+  coneRadius = coneRadius || axisLen * 0.08;
   segments = segments || 8;
 
   const lineVerts = [];
@@ -81,6 +88,46 @@ export function buildTranslateGizmo(center, axisLen, coneLen, coneRadius, segmen
 
     // Hit area: axis start to end
     hitAreas[axis.name] = { start: [...center], end };
+  }
+
+  // Plane handles: small quads at intersection of two axes
+  const planeOff = axisLen * 0.3;
+  const planeHalf = axisLen * 0.15;
+  const planes = [
+    { name: 'xz', d1: [1,0,0], d2: [0,0,1], normal: [0,1,0] },
+    { name: 'xy', d1: [1,0,0], d2: [0,1,0], normal: [0,0,1] },
+    { name: 'yz', d1: [0,1,0], d2: [0,0,1], normal: [1,0,0] },
+  ];
+  for (const pl of planes) {
+    const c = AXIS_COLORS[pl.name];
+    // Quad center: offset along both participating axes
+    const qc = [
+      center[0] + pl.d1[0] * planeOff + pl.d2[0] * planeOff,
+      center[1] + pl.d1[1] * planeOff + pl.d2[1] * planeOff,
+      center[2] + pl.d1[2] * planeOff + pl.d2[2] * planeOff,
+    ];
+    // 4 corners
+    const p0 = [qc[0] - pl.d1[0]*planeHalf - pl.d2[0]*planeHalf,
+                qc[1] - pl.d1[1]*planeHalf - pl.d2[1]*planeHalf,
+                qc[2] - pl.d1[2]*planeHalf - pl.d2[2]*planeHalf];
+    const p1 = [qc[0] + pl.d1[0]*planeHalf - pl.d2[0]*planeHalf,
+                qc[1] + pl.d1[1]*planeHalf - pl.d2[1]*planeHalf,
+                qc[2] + pl.d1[2]*planeHalf - pl.d2[2]*planeHalf];
+    const p2 = [qc[0] + pl.d1[0]*planeHalf + pl.d2[0]*planeHalf,
+                qc[1] + pl.d1[1]*planeHalf + pl.d2[1]*planeHalf,
+                qc[2] + pl.d1[2]*planeHalf + pl.d2[2]*planeHalf];
+    const p3 = [qc[0] - pl.d1[0]*planeHalf + pl.d2[0]*planeHalf,
+                qc[1] - pl.d1[1]*planeHalf + pl.d2[1]*planeHalf,
+                qc[2] - pl.d1[2]*planeHalf + pl.d2[2]*planeHalf];
+    // Two triangles
+    triVerts.push(...p0, ...p1, ...p2, ...p0, ...p2, ...p3);
+    for (let i = 0; i < 6; i++) triColors.push(...c);
+    // Edge lines for visibility
+    lineVerts.push(...p0, ...p1, ...p1, ...p2, ...p2, ...p3, ...p3, ...p0);
+    const edgeColor = [c[0], c[1], c[2], 0.6];
+    for (let i = 0; i < 8; i++) lineColors.push(...edgeColor);
+
+    hitAreas[pl.name] = { center: qc, normal: pl.normal, d1: pl.d1, d2: pl.d2, halfSize: planeHalf };
   }
 
   // Merge line + triangle verts

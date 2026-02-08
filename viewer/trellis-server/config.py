@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     max_vram_gb: float = 10.0
     port: int = 8000
     host: str = "0.0.0.0"
+    worldlabs_api_key: str = ""
 
     class Config:
         env_prefix = "TRELLIS_"

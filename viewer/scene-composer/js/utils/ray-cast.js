@@ -58,19 +58,27 @@ function unproject(invVP, ndcX, ndcY, ndcZ) {
  * Caches result on the layer object.
  * @param {object} layer
  */
-function ensureBounds(layer) {
+export function ensureBounds(layer) {
   if (layer._boundsCached) return;
   const pos = layer.bakedPositions;
   const n = layer.count;
   if (n === 0) {
     layer._centroid = [0,0,0];
     layer._boundRadius = 0;
+    layer._aabbMin = [0,0,0];
+    layer._aabbMax = [0,0,0];
     layer._boundsCached = true;
     return;
   }
   let cx = 0, cy = 0, cz = 0;
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
   for (let i = 0; i < n; i++) {
-    cx += pos[i*3]; cy += pos[i*3+1]; cz += pos[i*3+2];
+    const px = pos[i*3], py = pos[i*3+1], pz = pos[i*3+2];
+    cx += px; cy += py; cz += pz;
+    if (px < minX) minX = px; if (px > maxX) maxX = px;
+    if (py < minY) minY = py; if (py > maxY) maxY = py;
+    if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
   }
   cx /= n; cy /= n; cz /= n;
   let maxR2 = 0;
@@ -81,6 +89,8 @@ function ensureBounds(layer) {
   }
   layer._centroid = [cx, cy, cz];
   layer._boundRadius = Math.sqrt(maxR2);
+  layer._aabbMin = [minX, minY, minZ];
+  layer._aabbMax = [maxX, maxY, maxZ];
   layer._boundsCached = true;
 }
 
@@ -227,4 +237,44 @@ export function rayAxisClosestT(ray, axisOrigin, axisDir) {
   const denom = a*c - b*b;
   if (Math.abs(denom) < 1e-10) return 0;
   return (b*e - c*d) / denom;
+}
+
+/**
+ * Ray vs plane intersection.
+ * @param {object} ray - { origin, direction }
+ * @param {number[]} planePoint - any point on the plane
+ * @param {number[]} planeNormal - unit normal
+ * @returns {number[]|null} hit point [x,y,z] or null
+ */
+export function rayPlaneIntersect(ray, planePoint, planeNormal) {
+  const denom = dot(ray.direction, planeNormal);
+  if (Math.abs(denom) < 1e-10) return null;
+  const t = dot(sub(planePoint, ray.origin), planeNormal) / denom;
+  if (t < 0) return null;
+  return add(ray.origin, scale(ray.direction, t));
+}
+
+/**
+ * Ray vs axis-aligned quad (for plane handles).
+ * @param {object} ray
+ * @param {number[]} quadCenter - center of quad in world space
+ * @param {number[]} normal - quad face normal
+ * @param {number[]} d1 - first quad direction (unit)
+ * @param {number[]} d2 - second quad direction (unit)
+ * @param {number} halfSize - half-width of quad
+ * @returns {{ hit: boolean, t: number }|null}
+ */
+export function rayVsQuad(ray, quadCenter, normal, d1, d2, halfSize) {
+  const denom = dot(ray.direction, normal);
+  if (Math.abs(denom) < 1e-10) return null;
+  const t = dot(sub(quadCenter, ray.origin), normal) / denom;
+  if (t < 0) return null;
+  const hitPoint = add(ray.origin, scale(ray.direction, t));
+  const local = sub(hitPoint, quadCenter);
+  const u = Math.abs(dot(local, d1));
+  const v = Math.abs(dot(local, d2));
+  if (u <= halfSize && v <= halfSize) {
+    return { hit: true, t };
+  }
+  return null;
 }

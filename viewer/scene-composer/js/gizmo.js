@@ -11,7 +11,7 @@ import {
 } from './gizmo-geometry.js';
 import {
   screenToRay, rayVsLayerBounds, rayVsAxis, rayVsRing, rayVsCube,
-  rayAxisClosestT, invalidateBounds,
+  rayAxisClosestT, rayPlaneIntersect, rayVsQuad, invalidateBounds,
 } from './utils/ray-cast.js';
 
 const AXIS_DIRS = { x: [1,0,0], y: [0,1,0], z: [0,0,1] };
@@ -26,6 +26,7 @@ export class Gizmo {
 
     // State
     this.mode = 'translate'; // 'translate' | 'rotate' | 'scale'
+    this.visible = false;    // hidden by default; shown via G/R/S keys or buttons
     this.activeAxis = null;
     this.hoveredAxis = null;
     this.dragging = false;
@@ -118,7 +119,7 @@ export class Gizmo {
 
   render(viewMatrix, projMatrix) {
     const selectedLayer = this.sceneManager.getSelectedLayer();
-    if (!selectedLayer) {
+    if (!selectedLayer || !this.visible) {
       this._currentHitAreas = null;
       return;
     }
@@ -191,14 +192,16 @@ export class Gizmo {
     const normal = AXIS_COLORS[axis];
     if (!normal) return;
 
-    // Replace matching colors in the color array
+    // Replace matching colors (check RGBA to distinguish axis vs plane
+    // handles that share the same RGB but differ in alpha)
     const colors = geom.colors;
     const totalVerts = colors.length / 4;
     for (let i = 0; i < totalVerts; i++) {
       const off = i * 4;
       if (Math.abs(colors[off]-normal[0]) < 0.01 &&
           Math.abs(colors[off+1]-normal[1]) < 0.01 &&
-          Math.abs(colors[off+2]-normal[2]) < 0.01) {
+          Math.abs(colors[off+2]-normal[2]) < 0.01 &&
+          Math.abs(colors[off+3]-normal[3]) < 0.3) {
         colors[off] = highlight[0];
         colors[off+1] = highlight[1];
         colors[off+2] = highlight[2];
@@ -219,6 +222,9 @@ export class Gizmo {
     // Record click start for click-vs-drag detection in mouseup
     this._clickStart = { x: clientX, y: clientY };
 
+    // Gizmo hidden → pass through (directManip handles interaction)
+    if (!this.visible) return false;
+
     // Only consume if gizmo handle hit (start drag immediately)
     if (this.sceneManager.getSelectedLayer() && this._currentHitAreas) {
       const ray = this._makeRay(clientX, clientY);
@@ -238,6 +244,9 @@ export class Gizmo {
       this._updateDrag(clientX, clientY, event.shiftKey);
       return;
     }
+
+    // No hover detection when gizmo is hidden
+    if (!this.visible) return;
 
     // Hover detection
     if (this.sceneManager.getSelectedLayer() && this._currentHitAreas) {
@@ -260,6 +269,9 @@ export class Gizmo {
       this._endDrag();
       return;
     }
+
+    // Gizmo hidden → skip selection (directManip handles it)
+    if (!this.visible) { this._clickStart = null; return; }
 
     // Click detection: mouseup close to mousedown = click (not drag)
     if (this._clickStart) {
@@ -287,12 +299,31 @@ export class Gizmo {
 
   setMode(mode) {
     this.mode = mode;
+    this.visible = true;  // setting mode = show gizmo
     this.hoveredAxis = null;
+    this._updateModeHUD();
+  }
+
+  show(mode) {
+    this.visible = true;
+    if (mode) this.mode = mode;
+    this._updateModeHUD();
+  }
+
+  hide() {
+    this.visible = false;
+    this.hoveredAxis = null;
+    this.activeAxis = null;
+    if (this.dragging) {
+      this.dragging = false;
+      this.gl.canvas.style.cursor = '';
+    }
     this._updateModeHUD();
   }
 
   deselect() {
     this.sceneManager.selectLayer(null);
+    this.visible = false;
     this.hoveredAxis = null;
     this.activeAxis = null;
     if (this.dragging) {
@@ -303,11 +334,13 @@ export class Gizmo {
   }
 
   _updateModeHUD() {
-    const el = document.getElementById('gizmo-mode');
-    if (!el) return;
-    const labels = { translate: 'G: Translate', rotate: 'R: Rotate', scale: 'S: Scale' };
-    el.textContent = labels[this.mode] || '';
-    el.style.display = this.sceneManager.getSelectedLayer() ? '' : 'none';
+    const container = document.getElementById('gizmo-modes');
+    if (!container) return;
+    const hasSelection = !!this.sceneManager.getSelectedLayer();
+    container.style.display = hasSelection ? '' : 'none';
+    for (const btn of container.querySelectorAll('.gizmo-mode-btn')) {
+      btn.classList.toggle('active', this.visible && btn.dataset.mode === this.mode);
+    }
   }
 
   // ── Internal: Ray building ────────────────────────────────────────
@@ -325,17 +358,28 @@ export class Gizmo {
 
   _testGizmoHit(ray) {
     const ha = this._currentHitAreas;
-    const threshold = this._currentAxisLength * 0.12;
+    const threshold = this._currentAxisLength * 0.18;
     let bestAxis = null;
     let bestT = Infinity;
 
     if (this.mode === 'translate') {
+      // Test single-axis arrows
       for (const axis of ['x', 'y', 'z']) {
         if (!ha[axis]) continue;
         const result = rayVsAxis(ray, ha[axis].start, ha[axis].end, threshold);
         if (result && result.t < bestT) {
           bestT = result.t;
           bestAxis = axis;
+        }
+      }
+      // Test plane handles (prioritize if hit — they're smaller/harder to click)
+      for (const plane of ['xz', 'xy', 'yz']) {
+        if (!ha[plane]) continue;
+        const ph = ha[plane];
+        const result = rayVsQuad(ray, ph.center, ph.normal, ph.d1, ph.d2, ph.halfSize);
+        if (result && result.t < bestT) {
+          bestT = result.t;
+          bestAxis = plane;
         }
       }
     } else if (this.mode === 'rotate') {
@@ -408,6 +452,37 @@ export class Gizmo {
 
   _updateTranslate(clientX, clientY, layer, shiftKey) {
     const ray = this._makeRay(clientX, clientY);
+
+    // Plane drag (xz, xy, yz)
+    if (this.activeAxis && this.activeAxis.length === 2) {
+      const normalMap = { xy: [0,0,1], xz: [0,1,0], yz: [1,0,0] };
+      const planeNormal = normalMap[this.activeAxis];
+      if (!planeNormal) return;
+
+      const startHit = rayPlaneIntersect(this.dragStart.ray, this.dragStart.position, planeNormal);
+      const currentHit = rayPlaneIntersect(ray, this.dragStart.position, planeNormal);
+      if (!startHit || !currentHit) return;
+
+      let dx = currentHit[0] - startHit[0];
+      let dy = currentHit[1] - startHit[1];
+      let dz = currentHit[2] - startHit[2];
+
+      if (shiftKey) {
+        dx = Math.round(dx / 0.5) * 0.5;
+        dy = Math.round(dy / 0.5) * 0.5;
+        dz = Math.round(dz / 0.5) * 0.5;
+      }
+
+      const newPos = [
+        this.dragStart.position[0] + dx,
+        this.dragStart.position[1] + dy,
+        this.dragStart.position[2] + dz,
+      ];
+      this.sceneManager.setPosition(layer.id, newPos);
+      return;
+    }
+
+    // Single-axis drag
     const axisDir = AXIS_DIRS[this.activeAxis];
     if (!axisDir) return;
 
