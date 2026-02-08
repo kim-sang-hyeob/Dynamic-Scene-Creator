@@ -4,7 +4,7 @@
  */
 
 // Maximum number of animated objects (must match shader)
-const MAX_OBJECTS = 4;
+const MAX_OBJECTS = 12;
 
 export class ObjectAnimator {
   constructor(renderer, sceneManager) {
@@ -71,15 +71,7 @@ export class ObjectAnimator {
   setPathSpeed(layerId, speed) {
     const animObj = this.animatedObjects.find(o => o.layerId === layerId);
     if (animObj) {
-      // Maintain current position when changing speed
-      if (animObj.startTime !== null) {
-        const now = performance.now();
-        const oldElapsed = (now - animObj.startTime) * animObj.pathSpeed;
-        animObj.pathSpeed = Math.max(0.01, Math.min(5.0, speed));
-        animObj.startTime = now - oldElapsed / animObj.pathSpeed;
-      } else {
-        animObj.pathSpeed = Math.max(0.01, Math.min(5.0, speed));
-      }
+      animObj.pathSpeed = Math.max(0.01, Math.min(5.0, speed));
     }
   }
 
@@ -94,29 +86,28 @@ export class ObjectAnimator {
   }
 
   /**
+   * Set height offset for a specific layer.
+   */
+  setHeightOffset(layerId, offset) {
+    const animObj = this.animatedObjects.find(o => o.layerId === layerId);
+    if (animObj) {
+      animObj.heightOffset = Math.max(-10.0, Math.min(10.0, offset));
+    }
+  }
+
+  /**
    * Toggle play/pause.
    */
   togglePlay() {
     this.isPlaying = !this.isPlaying;
+    const now = performance.now();
     if (this.isPlaying) {
-      // Reset start times to continue from current position
-      const now = performance.now();
+      // Resume: reset lastUpdateTime to now
       for (const obj of this.animatedObjects) {
-        if (obj.pausedT !== undefined) {
-          obj.startTime = now - (obj.pausedT * obj.duration) / obj.pathSpeed;
-          delete obj.pausedT;
-        }
-      }
-    } else {
-      // Store current position
-      for (const obj of this.animatedObjects) {
-        if (obj.startTime !== null) {
-          const now = performance.now();
-          const elapsed = (now - obj.startTime) * obj.pathSpeed;
-          obj.pausedT = (elapsed % obj.duration) / obj.duration;
-        }
+        obj.lastUpdateTime = now;
       }
     }
+    // When pausing, currentT is already stored, no action needed
     return this.isPlaying;
   }
 
@@ -125,10 +116,11 @@ export class ObjectAnimator {
    */
   reset() {
     for (const obj of this.animatedObjects) {
-      obj.startTime = null;
+      obj.currentT = 0;
+      obj.direction = 1;
+      obj.lastUpdateTime = undefined;
       obj.currentOffset = [0, 0, 0];
       obj.currentYaw = 0;
-      delete obj.pausedT;
     }
   }
 
@@ -156,19 +148,38 @@ export class ObjectAnimator {
 
       // Calculate animation state
       if (this.isPlaying && obj.samples && obj.samples.length > 0) {
-        if (obj.startTime === null) {
-          obj.startTime = now;
+        if (obj.lastUpdateTime === undefined) {
+          obj.lastUpdateTime = now;
         }
 
-        const elapsed = (now - obj.startTime) * obj.pathSpeed;
-        let t;
-        if (obj.loop) {
-          t = (elapsed % obj.duration) / obj.duration;
+        // Calculate delta time and update t
+        const deltaTime = (now - obj.lastUpdateTime) * obj.pathSpeed;
+        obj.lastUpdateTime = now;
+
+        // Update t based on direction
+        const deltaT = (deltaTime / obj.duration) * obj.direction;
+        obj.currentT = (obj.currentT || 0) + deltaT;
+
+        // Handle ping-pong or loop
+        if (obj.pingPong) {
+          // Ping-pong: reverse direction at endpoints
+          if (obj.currentT >= 1.0) {
+            obj.currentT = 1.0;
+            obj.direction = -1;
+          } else if (obj.currentT <= 0.0) {
+            obj.currentT = 0.0;
+            obj.direction = 1;
+          }
+        } else if (obj.loop) {
+          // Regular loop: wrap around
+          obj.currentT = obj.currentT % 1.0;
+          if (obj.currentT < 0) obj.currentT += 1.0;
         } else {
-          t = Math.min(elapsed / obj.duration, 1.0);
+          // No loop: clamp
+          obj.currentT = Math.max(0, Math.min(1, obj.currentT));
         }
 
-        const pathState = this._interpolatePath(obj, t);
+        const pathState = this._interpolatePath(obj, obj.currentT, obj.direction);
         obj.currentOffset = pathState.offset;
         obj.currentYaw = pathState.yaw;
       }
@@ -195,8 +206,10 @@ export class ObjectAnimator {
       // Animation settings
       pathSpeed: pathData?.settings?.pathSpeed || 0.5,
       walkSpeed: pathData?.settings?.walkSpeed || 1.0,
+      heightOffset: pathData?.settings?.heightOffset || 0.0,  // Vertical offset (Y-axis)
       duration: (pathData?.settings?.duration || 10) * 1000, // Convert to ms
       loop: true,
+      pingPong: true,         // Enable ping-pong (back and forth) animation
       // State
       startTime: null,
       samples: null,
@@ -204,7 +217,9 @@ export class ObjectAnimator {
       center: [0, 0, 0],      // Object's bounding box center
       pathStart: [0, 0, 0],   // Path starting point
       currentOffset: [0, 0, 0],
-      currentYaw: 0
+      currentYaw: 0,
+      direction: 1,           // 1 = forward, -1 = backward
+      currentT: 0             // Current position on path [0, 1]
     };
 
     this._initializePath(obj);
@@ -255,7 +270,9 @@ export class ObjectAnimator {
       obj.duration = dur;
     }
 
-    obj.startTime = null;
+    obj.currentT = 0;
+    obj.direction = 1;
+    obj.lastUpdateTime = undefined;
     obj.currentOffset = [0, 0, 0];
     obj.currentYaw = 0;
 
@@ -263,7 +280,7 @@ export class ObjectAnimator {
     console.log(`[ObjectAnimator] Object center: [${obj.center.map(v => v.toFixed(2)).join(', ')}], Path start: [${obj.pathStart.map(v => v.toFixed(2)).join(', ')}]`);
   }
 
-  _interpolatePath(obj, t) {
+  _interpolatePath(obj, t, direction = 1) {
     const samples = obj.samples;
     const yawAngles = obj.yawAngles;
     const objectCenter = obj.center;
@@ -290,12 +307,18 @@ export class ObjectAnimator {
       yaw = yawAngles[i] + alpha * (yawAngles[i + 1] - yawAngles[i]);
     }
 
-    // Offset = path position - object center
+    // When moving backward, rotate 180 degrees to face the opposite direction
+    if (direction < 0) {
+      yaw += Math.PI;
+    }
+
+    // Offset = path position - object center + height offset on Y-axis
     // This moves the object from its original position to the path position
+    const heightOffset = obj.heightOffset || 0;
     return {
       offset: [
         position[0] - objectCenter[0],
-        position[1] - objectCenter[1],
+        position[1] - objectCenter[1] + heightOffset,
         position[2] - objectCenter[2]
       ],
       yaw: yaw

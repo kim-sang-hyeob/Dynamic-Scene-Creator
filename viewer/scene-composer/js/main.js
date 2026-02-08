@@ -484,6 +484,8 @@ function showPathAssignmentDialog(layerId, layerName) {
     const pathData = getCurrentPathData();
     if (pathData) {
       assignPathToLayer(layerId, pathData);
+      // Clear path points from viewer after assignment
+      pathEditor.clearAll();
       showToast(`Path assigned to "${layerName}"!`);
     }
     closeModal();

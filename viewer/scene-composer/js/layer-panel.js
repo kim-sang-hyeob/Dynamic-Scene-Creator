@@ -351,6 +351,7 @@ export class LayerPanel {
     }
 
     animSection.style.display = 'block';
+    const heightOffset = animObj.heightOffset || 0;
     animSection.innerHTML = `
       <div class="transform-title" style="margin-top: 8px;">
         <span>&#127939; Path Animation</span>
@@ -365,6 +366,11 @@ export class LayerPanel {
         <input type="range" id="anim-walk-speed" min="0" max="3" step="0.1" value="${animObj.walkSpeed}">
         <span class="anim-value" id="anim-walk-speed-val">${animObj.walkSpeed.toFixed(1)}x</span>
       </div>
+      <div class="anim-control-row">
+        <label class="anim-label">Height</label>
+        <input type="range" id="anim-height-offset" min="-2" max="2" step="0.05" value="${heightOffset}">
+        <span class="anim-value" id="anim-height-offset-val">${heightOffset.toFixed(2)}</span>
+      </div>
       <div class="anim-control-row" style="margin-top: 8px;">
         <button class="anim-btn" id="anim-play-btn">${this.objectAnimator.isPlaying ? '⏸ Pause' : '▶ Play'}</button>
         <button class="anim-btn" id="anim-reset-btn">↺ Reset</button>
@@ -375,8 +381,10 @@ export class LayerPanel {
     // Bind events
     const pathSpeedSlider = document.getElementById('anim-path-speed');
     const walkSpeedSlider = document.getElementById('anim-walk-speed');
+    const heightOffsetSlider = document.getElementById('anim-height-offset');
     const pathSpeedVal = document.getElementById('anim-path-speed-val');
     const walkSpeedVal = document.getElementById('anim-walk-speed-val');
+    const heightOffsetVal = document.getElementById('anim-height-offset-val');
 
     pathSpeedSlider.oninput = () => {
       const val = parseFloat(pathSpeedSlider.value);
@@ -388,6 +396,12 @@ export class LayerPanel {
       const val = parseFloat(walkSpeedSlider.value);
       this.objectAnimator.setWalkSpeed(layer.id, val);
       walkSpeedVal.textContent = val.toFixed(1) + 'x';
+    };
+
+    heightOffsetSlider.oninput = () => {
+      const val = parseFloat(heightOffsetSlider.value);
+      this.objectAnimator.setHeightOffset(layer.id, val);
+      heightOffsetVal.textContent = val.toFixed(2);
     };
 
     document.getElementById('anim-play-btn').onclick = () => {

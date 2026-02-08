@@ -102,7 +102,7 @@ uniform vec2 viewport;
 uniform float time;
 
 // Multi-object path animation uniforms
-#define MAX_OBJECTS 4
+#define MAX_OBJECTS 12
 uniform int u_num_objects;
 uniform int u_obj_start_index[MAX_OBJECTS];
 uniform int u_obj_end_index[MAX_OBJECTS];
@@ -255,7 +255,7 @@ void main () {
 `.trim();
 
 // ── Constants ─────────────────────────────────────────────────────────
-const MAX_OBJECTS = 4;
+const MAX_OBJECTS = 12;
 
 // ── Renderer Class ────────────────────────────────────────────────────
 export class SplatRenderer {
