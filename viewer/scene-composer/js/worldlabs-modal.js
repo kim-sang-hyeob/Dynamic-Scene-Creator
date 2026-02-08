@@ -169,6 +169,10 @@ export class WorldLabsModal {
       this._showToast('Map already exists. Remove it first to generate a new one.', 'error');
       return;
     }
+    // Hide drop zone while modal is open
+    const dropZone = document.getElementById('drop-zone');
+    if (dropZone) dropZone.classList.remove('empty');
+
     this.overlay.style.display = 'flex';
     this.textInput.focus();
   }
@@ -176,6 +180,12 @@ export class WorldLabsModal {
   close() {
     if (this.isGenerating) return;
     this.overlay.style.display = 'none';
+
+    // Restore drop zone if no layers exist
+    if (this.sceneManager.layers.length === 0) {
+      const dropZone = document.getElementById('drop-zone');
+      if (dropZone) dropZone.classList.add('empty');
+    }
   }
 
   // ── Generation ────────────────────────────────────────────────────
