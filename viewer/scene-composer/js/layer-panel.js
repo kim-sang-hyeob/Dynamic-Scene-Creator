@@ -121,7 +121,9 @@ export class LayerPanel {
       let blob, filename;
 
       if (format === 'splatv') {
-        blob = exportSceneToSplatv(this.sceneManager, this.controls, this.pathEditor);
+        blob = exportSceneToSplatv(this.sceneManager, this.controls, this.pathEditor, {
+          objectAnimator: this.objectAnimator
+        });
         filename = `scene_${timestamp}.splatv`;
       } else {
         blob = exportSceneToSplat(this.sceneManager);
@@ -209,11 +211,13 @@ export class LayerPanel {
 
     const icon = layer.type === 'map' ? '&#x1f5fa;' : '&#x1f4e6;';
     const canDelete = layer.type !== 'map';
+    const hasAnimation = this.objectAnimator?.getLayerAnimation(layer.id);
+    const animIcon = hasAnimation ? ' <span class="anim-indicator" title="Animated">&#127939;</span>' : '';
 
     el.innerHTML = `
       <div class="layer-color" style="background:${color};opacity:${layer.visible ? 1 : 0.3}"></div>
       <div class="layer-info">
-        <div class="layer-name">${icon} ${this._escapeHtml(layer.name)}</div>
+        <div class="layer-name">${icon} ${this._escapeHtml(layer.name)}${animIcon}</div>
         <div class="layer-stats">${layer.count.toLocaleString()} gs</div>
       </div>
       <div class="layer-actions">
@@ -260,6 +264,7 @@ export class LayerPanel {
 
     if (!layer || !this.transformEl) {
       if (this.transformEl) this.transformEl.classList.add('hidden');
+      this._hideAnimationControls();
       return;
     }
 
@@ -272,6 +277,9 @@ export class LayerPanel {
     this._setInputValue('rot-y', layer.rotation[1]);
     this._setInputValue('rot-z', layer.rotation[2]);
     this._setInputValue('scale', layer.scale);
+
+    // Render animation controls if layer has path
+    this._renderAnimationControls(layer);
   }
 
   _setInputValue(id, value) {
@@ -321,5 +329,86 @@ export class LayerPanel {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  // ── Animation Controls ────────────────────────────────────────────
+
+  _renderAnimationControls(layer) {
+    // Get or create animation section
+    let animSection = document.getElementById('animation-section');
+    if (!animSection) {
+      animSection = document.createElement('div');
+      animSection.id = 'animation-section';
+      animSection.className = 'animation-section';
+      this.transformEl.after(animSection);
+    }
+
+    // Check if layer has animation
+    const animObj = this.objectAnimator?.getLayerAnimation(layer.id);
+    if (!animObj) {
+      animSection.style.display = 'none';
+      return;
+    }
+
+    animSection.style.display = 'block';
+    animSection.innerHTML = `
+      <div class="transform-title" style="margin-top: 8px;">
+        <span>&#127939; Path Animation</span>
+      </div>
+      <div class="anim-control-row">
+        <label class="anim-label">Path Speed</label>
+        <input type="range" id="anim-path-speed" min="0.1" max="3" step="0.1" value="${animObj.pathSpeed}">
+        <span class="anim-value" id="anim-path-speed-val">${animObj.pathSpeed.toFixed(1)}x</span>
+      </div>
+      <div class="anim-control-row">
+        <label class="anim-label">Walk Speed</label>
+        <input type="range" id="anim-walk-speed" min="0" max="3" step="0.1" value="${animObj.walkSpeed}">
+        <span class="anim-value" id="anim-walk-speed-val">${animObj.walkSpeed.toFixed(1)}x</span>
+      </div>
+      <div class="anim-control-row" style="margin-top: 8px;">
+        <button class="anim-btn" id="anim-play-btn">${this.objectAnimator.isPlaying ? '⏸ Pause' : '▶ Play'}</button>
+        <button class="anim-btn" id="anim-reset-btn">↺ Reset</button>
+        <button class="anim-btn anim-btn-danger" id="anim-remove-btn">✕ Remove</button>
+      </div>
+    `;
+
+    // Bind events
+    const pathSpeedSlider = document.getElementById('anim-path-speed');
+    const walkSpeedSlider = document.getElementById('anim-walk-speed');
+    const pathSpeedVal = document.getElementById('anim-path-speed-val');
+    const walkSpeedVal = document.getElementById('anim-walk-speed-val');
+
+    pathSpeedSlider.oninput = () => {
+      const val = parseFloat(pathSpeedSlider.value);
+      this.objectAnimator.setPathSpeed(layer.id, val);
+      pathSpeedVal.textContent = val.toFixed(1) + 'x';
+    };
+
+    walkSpeedSlider.oninput = () => {
+      const val = parseFloat(walkSpeedSlider.value);
+      this.objectAnimator.setWalkSpeed(layer.id, val);
+      walkSpeedVal.textContent = val.toFixed(1) + 'x';
+    };
+
+    document.getElementById('anim-play-btn').onclick = () => {
+      const isPlaying = this.objectAnimator.togglePlay();
+      document.getElementById('anim-play-btn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+    };
+
+    document.getElementById('anim-reset-btn').onclick = () => {
+      this.objectAnimator.reset();
+    };
+
+    document.getElementById('anim-remove-btn').onclick = () => {
+      this.objectAnimator.removeLayerPath(layer.id);
+      this.render();
+    };
+  }
+
+  _hideAnimationControls() {
+    const animSection = document.getElementById('animation-section');
+    if (animSection) {
+      animSection.style.display = 'none';
+    }
   }
 }

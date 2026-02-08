@@ -101,6 +101,15 @@ uniform vec2 focal;
 uniform vec2 viewport;
 uniform float time;
 
+// Multi-object path animation uniforms
+#define MAX_OBJECTS 4
+uniform int u_num_objects;
+uniform int u_obj_start_index[MAX_OBJECTS];
+uniform int u_obj_end_index[MAX_OBJECTS];
+uniform vec3 u_obj_center[MAX_OBJECTS];
+uniform vec3 u_obj_path_offset[MAX_OBJECTS];
+uniform float u_obj_path_yaw[MAX_OBJECTS];
+
 in vec2 position;
 in int index;
 
@@ -126,7 +135,38 @@ void main () {
     vec4 trot = vec4(unpackHalf2x16(motion1.y).xy, unpackHalf2x16(motion1.z).xy) * dt;
     vec3 tpos = (vec3(m0.xy, m1.x) * dt + vec3(m1.y, m2.xy) * dt*dt + vec3(m3.xy, m4.x) * dt*dt*dt);
 
-    vec4 cam = view * vec4(uintBitsToFloat(static0.xyz) + tpos, 1);
+    // Local position after walk animation
+    vec3 local_pos = uintBitsToFloat(static0.xyz) + tpos;
+
+    // Find which object this gaussian belongs to and apply path animation
+    vec3 world_pos = local_pos;
+    float applied_yaw = 0.0;
+    bool apply_rotation = false;
+
+    for (int i = 0; i < MAX_OBJECTS; i++) {
+        if (i >= u_num_objects) break;
+        if (index >= u_obj_start_index[i] && index < u_obj_end_index[i]) {
+            vec3 center = u_obj_center[i];
+            vec3 offset = u_obj_path_offset[i];
+            float yaw = u_obj_path_yaw[i];
+
+            // Rotate around object center
+            vec3 rel_pos = local_pos - center;
+            float cy = cos(yaw);
+            float sy = sin(yaw);
+            vec3 rotated_rel = vec3(
+                rel_pos.x * cy + rel_pos.z * sy,
+                rel_pos.y,
+                -rel_pos.x * sy + rel_pos.z * cy
+            );
+            world_pos = center + rotated_rel + offset;
+            applied_yaw = yaw;
+            apply_rotation = true;
+            break;
+        }
+    }
+
+    vec4 cam = view * vec4(world_pos, 1);
     vec4 pos = projection * cam;
 
     float clip = 1.2 * pos.w;
@@ -134,6 +174,21 @@ void main () {
     uvec4 static1 = texelFetch(u_texture, ivec2(((uint(index) & 0x3ffu) << 2) | 1u, uint(index) >> 10), 0);
 
     vec4 rot = vec4(unpackHalf2x16(static0.w).xy, unpackHalf2x16(static1.x).xy) + trot;
+
+    // Apply path rotation to Gaussian orientation if needed
+    if (apply_rotation) {
+        float half_yaw = applied_yaw * 0.5;
+        vec4 path_quat = vec4(cos(half_yaw), 0.0, sin(half_yaw), 0.0);
+        vec4 q1 = path_quat;
+        vec4 q2 = rot;
+        rot = vec4(
+            q1.x*q2.x - q1.y*q2.y - q1.z*q2.z - q1.w*q2.w,
+            q1.x*q2.y + q1.y*q2.x + q1.z*q2.w - q1.w*q2.z,
+            q1.x*q2.z - q1.y*q2.w + q1.z*q2.x + q1.w*q2.y,
+            q1.x*q2.w + q1.y*q2.z - q1.z*q2.y + q1.w*q2.x
+        );
+    }
+
     vec3 scale = vec3(unpackHalf2x16(static1.y).xy, unpackHalf2x16(static1.z).x);
     rot /= sqrt(dot(rot, rot));
 
@@ -199,6 +254,9 @@ void main () {
 }
 `.trim();
 
+// ── Constants ─────────────────────────────────────────────────────────
+const MAX_OBJECTS = 4;
+
 // ── Renderer Class ────────────────────────────────────────────────────
 export class SplatRenderer {
   constructor(canvas) {
@@ -220,6 +278,14 @@ export class SplatRenderer {
     this.u_focal = null;
     this.u_view = null;
     this.u_time = null;
+
+    // Object path animation uniforms
+    this.u_num_objects = null;
+    this.u_obj_start_index = [];
+    this.u_obj_end_index = [];
+    this.u_obj_center = [];
+    this.u_obj_path_offset = [];
+    this.u_obj_path_yaw = [];
 
     // Callbacks
     this.onAfterDraw = null; // (viewMatrix, projMatrix) => {} for overlay rendering
@@ -261,6 +327,18 @@ export class SplatRenderer {
     this.u_focal = gl.getUniformLocation(program, "focal");
     this.u_view = gl.getUniformLocation(program, "view");
     this.u_time = gl.getUniformLocation(program, "time");
+
+    // Object path animation uniforms
+    this.u_num_objects = gl.getUniformLocation(program, "u_num_objects");
+    for (let i = 0; i < MAX_OBJECTS; i++) {
+      this.u_obj_start_index.push(gl.getUniformLocation(program, `u_obj_start_index[${i}]`));
+      this.u_obj_end_index.push(gl.getUniformLocation(program, `u_obj_end_index[${i}]`));
+      this.u_obj_center.push(gl.getUniformLocation(program, `u_obj_center[${i}]`));
+      this.u_obj_path_offset.push(gl.getUniformLocation(program, `u_obj_path_offset[${i}]`));
+      this.u_obj_path_yaw.push(gl.getUniformLocation(program, `u_obj_path_yaw[${i}]`));
+    }
+    // Initialize with no animated objects
+    gl.uniform1i(this.u_num_objects, 0);
 
     // Quad vertices (instanced billboard)
     const triangleVertices = new Float32Array([-2, -2, 2, -2, 2, 2, -2, 2]);
@@ -398,5 +476,38 @@ export class SplatRenderer {
     };
 
     requestAnimationFrame(frame);
+  }
+
+  /**
+   * Update object path animation uniforms.
+   * @param {Array} objects - Array of animated object data:
+   *   { startIndex, endIndex, center: [x,y,z], offset: [x,y,z], yaw }
+   */
+  updateObjectAnimations(objects) {
+    const gl = this.gl;
+    if (!gl) return;
+
+    gl.useProgram(this.program);
+
+    const numObjects = Math.min(objects.length, MAX_OBJECTS);
+    gl.uniform1i(this.u_num_objects, numObjects);
+
+    for (let i = 0; i < MAX_OBJECTS; i++) {
+      if (i < numObjects) {
+        const obj = objects[i];
+        gl.uniform1i(this.u_obj_start_index[i], obj.startIndex || 0);
+        gl.uniform1i(this.u_obj_end_index[i], obj.endIndex || 0);
+        gl.uniform3fv(this.u_obj_center[i], obj.center || [0, 0, 0]);
+        gl.uniform3fv(this.u_obj_path_offset[i], obj.offset || [0, 0, 0]);
+        gl.uniform1f(this.u_obj_path_yaw[i], obj.yaw || 0);
+      } else {
+        // Clear unused slots
+        gl.uniform1i(this.u_obj_start_index[i], 0);
+        gl.uniform1i(this.u_obj_end_index[i], 0);
+        gl.uniform3fv(this.u_obj_center[i], [0, 0, 0]);
+        gl.uniform3fv(this.u_obj_path_offset[i], [0, 0, 0]);
+        gl.uniform1f(this.u_obj_path_yaw[i], 0);
+      }
+    }
   }
 }

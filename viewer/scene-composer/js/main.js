@@ -18,6 +18,7 @@ import { PathEditor } from './path-editor/path-editor.js';
 import { PathEditorPanel } from './path-editor-panel.js';
 import { DirectManip } from './direct-manip.js';
 import { SelectionBox } from './selection-box.js';
+import { ObjectAnimator } from './object-animator.js';
 
 // ── Globals ──────────────────────────────────────────────────────────
 let renderer;
@@ -32,6 +33,10 @@ let pathEditor;
 let pathEditorPanel;
 let directManip;
 let selectionBox;
+let objectAnimator;
+
+// Pending object path assignment (when path is drawn before object is dropped)
+let pendingObjectPath = null;
 
 // ── Init ─────────────────────────────────────────────────────────────
 function init() {
@@ -175,9 +180,16 @@ function init() {
   const mapBtn = document.querySelector('#prompt-bar .map-btn');
   if (mapBtn) mapBtn.onclick = () => worldLabsModal.open();
 
+  // Object Animator (path animation for objects)
+  objectAnimator = new ObjectAnimator(renderer, sceneManager);
+  layerPanel.objectAnimator = objectAnimator;  // For animation controls UI
+
   // Render loop
   renderer.startLoop(() => {
     const actualView = controls.update();
+
+    // Update object path animations
+    objectAnimator.update();
 
     // Update HUD
     if (fpsEl) fpsEl.textContent = renderer.fps + ' fps';
@@ -197,7 +209,7 @@ function init() {
   setupClipboardPaste();
 
   // Expose for console debugging
-  window.sceneComposer = { renderer, controls, sceneManager, layerPanel, gizmo, directManip, selectionBox, undoManager, promptBar, worldLabsModal, pathEditor, pathEditorPanel, loadFileAsLayer };
+  window.sceneComposer = { renderer, controls, sceneManager, layerPanel, gizmo, directManip, selectionBox, undoManager, promptBar, worldLabsModal, pathEditor, pathEditorPanel, objectAnimator, loadFileAsLayer, assignPathToLayer };
 
   // Help overlay — close on backdrop click or close button
   const helpOverlay = document.getElementById('help-overlay');
@@ -274,6 +286,19 @@ async function loadFileAsLayer(file, layerName) {
   if (dropZone) dropZone.classList.remove('empty');
 
   console.log(`Layer "${name}" (id=${layerId}): ${result.count.toLocaleString()} gaussians`);
+
+  // If this is an object layer and there's a pending path, assign it
+  if (type === 'object' && pendingObjectPath) {
+    assignPathToLayer(layerId, pendingObjectPath);
+    showToast(`Path assigned to "${name}"!`);
+    pendingObjectPath = null;
+  }
+  // Or if there's a current path in Path Editor and this is an object, offer to assign
+  else if (type === 'object' && pathEditor && pathEditor.controlPoints && pathEditor.controlPoints.length >= 2) {
+    // Show assignment dialog
+    showPathAssignmentDialog(layerId, name);
+  }
+
   return layerId;
 }
 
@@ -334,6 +359,12 @@ async function loadSplatvWithLayers(result, filename) {
       layer._originalScale = layerMeta.scale;
     }
 
+    // Restore path animation if present
+    if (layerMeta.path && layerMeta.path.controlPoints && layerMeta.path.controlPoints.length >= 2) {
+      objectAnimator.setLayerPath(layerId, layerMeta.path);
+      console.log(`    Path restored: ${layerMeta.path.controlPoints.length} control points`);
+    }
+
     layerIds.push(layerId);
     console.log(`  Layer "${layerMeta.name}" (${layerMeta.type}): ${count.toLocaleString()} gaussians`);
   }
@@ -343,6 +374,120 @@ async function loadSplatvWithLayers(result, filename) {
   if (dropZone) dropZone.classList.remove('empty');
 
   return layerIds;
+}
+
+// ── Object Path Assignment ───────────────────────────────────────────
+
+/**
+ * Assign a path to an object layer.
+ * @param {number} layerId - Layer ID
+ * @param {Object} pathData - Path data with controlPoints and settings
+ */
+function assignPathToLayer(layerId, pathData) {
+  if (!objectAnimator) return;
+
+  objectAnimator.setLayerPath(layerId, pathData);
+
+  // Update layer panel to show animation controls
+  if (layerPanel) {
+    layerPanel.render();
+  }
+
+  console.log(`Path assigned to layer ${layerId}`);
+}
+
+/**
+ * Set a pending path that will be assigned to the next dropped object.
+ * @param {Object} pathData - Path data with controlPoints and settings
+ */
+function setPendingObjectPath(pathData) {
+  pendingObjectPath = pathData;
+  console.log(`Pending object path set with ${pathData.controlPoints?.length || 0} points`);
+
+  // Show notification
+  showToast('Path ready! Drop a .splatv file to animate it along this path.');
+}
+
+/**
+ * Get path data from the current Path Editor state.
+ * @returns {Object|null} Path data or null if no points
+ */
+function getCurrentPathData() {
+  if (!pathEditor || !pathEditor.controlPoints || pathEditor.controlPoints.length < 2) {
+    return null;
+  }
+
+  return {
+    controlPoints: pathEditor.controlPoints.map(p => ({
+      position: [...p.position],
+      target: p.target ? [...p.target] : null
+    })),
+    settings: {
+      duration: pathEditor.duration || 5,
+      pathSpeed: 0.5,
+      walkSpeed: 1.0
+    }
+  };
+}
+
+/**
+ * Show toast notification.
+ */
+function showToast(message, type = 'success') {
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+/**
+ * Show dialog asking if user wants to assign current path to dropped object.
+ */
+function showPathAssignmentDialog(layerId, layerName) {
+  const overlay = document.createElement('div');
+  overlay.className = 'export-modal-overlay';
+  overlay.innerHTML = `
+    <div class="export-modal glass" style="width: 320px;">
+      <div class="export-modal-header">
+        <h3>Assign Path?</h3>
+        <button class="export-modal-close">&times;</button>
+      </div>
+      <div class="export-modal-body">
+        <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
+          A path with <strong>${pathEditor.controlPoints.length}</strong> control points is available.
+          Assign it to "<strong>${layerName}</strong>"?
+        </p>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button class="assign-no-btn" style="padding: 8px 16px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-secondary); cursor: pointer;">No</button>
+          <button class="assign-yes-btn" style="padding: 8px 16px; border: none; border-radius: 8px; background: var(--accent); color: white; cursor: pointer; font-weight: 500;">Yes, Animate!</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const closeModal = () => overlay.remove();
+
+  overlay.querySelector('.export-modal-close').onclick = closeModal;
+  overlay.querySelector('.assign-no-btn').onclick = closeModal;
+  overlay.onclick = (e) => {
+    if (e.target === overlay) closeModal();
+  };
+
+  overlay.querySelector('.assign-yes-btn').onclick = () => {
+    const pathData = getCurrentPathData();
+    if (pathData) {
+      assignPathToLayer(layerId, pathData);
+      showToast(`Path assigned to "${layerName}"!`);
+    }
+    closeModal();
+  };
 }
 
 // ── Keyboard Shortcuts ──────────────────────────────────────────────

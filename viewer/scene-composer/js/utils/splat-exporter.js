@@ -9,10 +9,12 @@
  * @param {CameraControls} controls - Camera controls for view matrix
  * @param {PathEditor} pathEditor - Path editor for camera path (optional)
  * @param {Object} options - Export options
+ * @param {ObjectAnimator} options.objectAnimator - Object animator for layer paths
  * @returns {Blob} .splatv file as Blob
  */
 export function exportSceneToSplatv(sceneManager, controls, pathEditor = null, options = {}) {
   const visibleLayers = sceneManager.layers.filter(l => l.visible);
+  const objectAnimator = options.objectAnimator;
 
   if (visibleLayers.length === 0) {
     throw new Error('No visible layers to export');
@@ -41,6 +43,17 @@ export function exportSceneToSplatv(sceneManager, controls, pathEditor = null, o
     const dstStart = offset * 16;
     mergedTexdata.set(layer.bakedTexdata.subarray(0, srcLen), dstStart);
 
+    // Get animation data for this layer
+    const animObj = objectAnimator?.getLayerAnimation(layer.id);
+    const layerPath = animObj ? {
+      controlPoints: animObj.path?.controlPoints || [],
+      settings: {
+        duration: (animObj.duration || 10000) / 1000, // Convert to seconds
+        pathSpeed: animObj.pathSpeed || 0.5,
+        walkSpeed: animObj.walkSpeed || 1.0
+      }
+    } : null;
+
     // Store layer metadata
     layersMetadata.push({
       name: layer.name,
@@ -51,6 +64,7 @@ export function exportSceneToSplatv(sceneManager, controls, pathEditor = null, o
       position: [...layer.position],
       rotation: [...layer.rotation],
       scale: layer.scale,
+      path: layerPath, // Include path data if exists
     });
 
     offset += layer.count;
@@ -60,17 +74,17 @@ export function exportSceneToSplatv(sceneManager, controls, pathEditor = null, o
   const viewMatrix = controls.getViewMatrix();
   const cameraInfo = extractCameraInfo(viewMatrix, controls);
 
-  // Get path data if available
+  // Get camera path data if available (for camera animation, not object paths)
   let pathData = null;
-  if (pathEditor && pathEditor.points && pathEditor.points.length > 0) {
+  if (pathEditor && pathEditor.controlPoints && pathEditor.controlPoints.length > 0) {
     pathData = {
-      points: pathEditor.points.map(p => ({
+      points: pathEditor.controlPoints.map(p => ({
         position: [...p.position],
         target: p.target ? [...p.target] : null,
       })),
       duration: pathEditor.duration || 5.0,
       settings: {
-        camDist: pathEditor.camDist,
+        camDist: pathEditor.camDistance,
         camAzimuth: pathEditor.camAzimuth,
         camElevation: pathEditor.camElevation,
       }
