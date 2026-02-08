@@ -206,7 +206,7 @@ export function parsePlyBuffer(buffer) {
 /**
  * Parse .splatv file (binary: magic 0x674b + JSON metadata + texdata).
  * @param {ArrayBuffer} buffer
- * @returns {{texdata: Uint32Array, texwidth: number, texheight: number, positions: Float32Array, count: number, cameras: Array}}
+ * @returns {{texdata: Uint32Array, texwidth: number, texheight: number, positions: Float32Array, count: number, cameras: Array, layers: Array|null}}
  */
 export function parseSplatvBuffer(buffer) {
   const view = new DataView(buffer);
@@ -221,6 +221,7 @@ export function parseSplatvBuffer(buffer) {
   const texwidth = chunk.texwidth;
   const texheight = chunk.texheight;
   const cameras = chunk.cameras || [];
+  const layers = chunk.layers || null;  // Layer metadata for restoration
 
   const dataOffset = 8 + jsonLen;
   const texdata = new Uint32Array(buffer.slice(dataOffset));
@@ -234,7 +235,7 @@ export function parseSplatvBuffer(buffer) {
     positions[3 * i + 2] = texdata_f[16 * i + 2];
   }
 
-  return { texdata, texwidth, texheight, positions, count, cameras };
+  return { texdata, texwidth, texheight, positions, count, cameras, layers };
 }
 
 /**

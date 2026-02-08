@@ -149,6 +149,8 @@ function init() {
 
   // Layer Panel
   layerPanel = new LayerPanel(sceneManager);
+  layerPanel.controls = controls;  // For export
+  layerPanel.pathEditor = pathEditor;  // For export
   layerPanel.bindTransformInputs();
   layerPanel.onAddLayerClick = () => {
     const input = document.createElement('input');
@@ -224,10 +226,10 @@ function init() {
 // ── File Loading as Layer ────────────────────────────────────────────
 
 /**
- * Load a file and add it as a new layer.
+ * Load a file and add it as a new layer (or multiple layers if splatv with layer metadata).
  * @param {File} file
  * @param {string} [layerName] - Optional layer name (defaults to filename)
- * @returns {Promise<number>} layer id
+ * @returns {Promise<number|number[]>} layer id(s)
  */
 async function loadFileAsLayer(file, layerName) {
   const buffer = await file.arrayBuffer();
@@ -250,6 +252,12 @@ async function loadFileAsLayer(file, layerName) {
         controls.setViewMatrix(getViewMatrix(cam));
       }
     }
+
+    // If splatv has layer metadata, restore layers separately
+    if (result.layers && result.layers.length > 0) {
+      const layerIds = await loadSplatvWithLayers(result, file.name);
+      return layerIds;
+    }
   } else {
     throw new Error('Unsupported format: ' + file.name);
   }
@@ -267,6 +275,74 @@ async function loadFileAsLayer(file, layerName) {
 
   console.log(`Layer "${name}" (id=${layerId}): ${result.count.toLocaleString()} gaussians`);
   return layerId;
+}
+
+/**
+ * Load splatv file with layer metadata, restoring separate layers.
+ * @param {Object} result - Parsed splatv result with layers metadata
+ * @param {string} filename - Original filename for logging
+ * @returns {Promise<number[]>} Array of layer ids
+ */
+async function loadSplatvWithLayers(result, filename) {
+  const layerIds = [];
+  const texdata = result.texdata;
+  const texdata_f = new Float32Array(texdata.buffer);
+
+  console.log(`Restoring ${result.layers.length} layers from ${filename}...`);
+
+  for (const layerMeta of result.layers) {
+    const startIdx = layerMeta.start_index;
+    const endIdx = layerMeta.end_index;
+    const count = layerMeta.count || (endIdx - startIdx);
+
+    // Extract this layer's texdata (16 uint32 per gaussian)
+    const layerTexdata = new Uint32Array(count * 16);
+    layerTexdata.set(texdata.subarray(startIdx * 16, endIdx * 16));
+
+    // Extract positions from texdata
+    const layerTexdata_f = new Float32Array(layerTexdata.buffer);
+    const positions = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      positions[3 * i + 0] = layerTexdata_f[16 * i + 0];
+      positions[3 * i + 1] = layerTexdata_f[16 * i + 1];
+      positions[3 * i + 2] = layerTexdata_f[16 * i + 2];
+    }
+
+    // Calculate texwidth/texheight for this layer
+    const texwidth = 1024 * 4;
+    const texheight = Math.ceil((4 * count) / texwidth);
+
+    // Add layer with original type
+    const layerId = sceneManager.addLayer(
+      layerMeta.name,
+      layerTexdata,
+      positions,
+      count,
+      texwidth,
+      texheight,
+      layerMeta.type || 'object'
+    );
+
+    // Note: Transforms are already baked into the texdata during export,
+    // so we don't need to apply them again. But we store the original
+    // transform values for reference/UI display.
+    const layer = sceneManager.getLayer(layerId);
+    if (layer && layerMeta.position) {
+      // Store original transform for UI display (already baked in data)
+      layer._originalPosition = layerMeta.position;
+      layer._originalRotation = layerMeta.rotation;
+      layer._originalScale = layerMeta.scale;
+    }
+
+    layerIds.push(layerId);
+    console.log(`  Layer "${layerMeta.name}" (${layerMeta.type}): ${count.toLocaleString()} gaussians`);
+  }
+
+  // Hide drop zone after load
+  const dropZone = document.getElementById('drop-zone');
+  if (dropZone) dropZone.classList.remove('empty');
+
+  return layerIds;
 }
 
 // ── Keyboard Shortcuts ──────────────────────────────────────────────

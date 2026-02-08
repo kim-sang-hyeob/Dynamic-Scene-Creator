@@ -4,6 +4,8 @@
  * Shows transform inputs for the selected layer.
  */
 
+import { exportSceneToSplatv, exportSceneToSplat, downloadBlob } from './utils/splat-exporter.js';
+
 const LAYER_COLORS = ['#3b82f6', '#22c55e', '#ef4444', '#f59e0b', '#a855f7', '#ec4899', '#06b6d4', '#f97316'];
 
 export class LayerPanel {
@@ -13,6 +15,10 @@ export class LayerPanel {
     this.listEl = document.getElementById('layer-list');
     this.transformEl = document.getElementById('transform-section');
     this.onAddLayerClick = null;
+
+    // External refs (set by main.js)
+    this.controls = null;
+    this.pathEditor = null;
 
     this._bindEvents();
     this.render();
@@ -26,11 +32,123 @@ export class LayerPanel {
       });
     }
 
+    // Export button
+    const exportBtn = this.panelEl.querySelector('.export-scene-btn');
+    if (exportBtn) {
+      exportBtn.addEventListener('click', () => this._handleExport());
+    }
+
     const origOnChange = this.sceneManager.onChange;
     this.sceneManager.onChange = (event, data) => {
       if (origOnChange) origOnChange(event, data);
       this.render();
     };
+  }
+
+  /**
+   * Handle export button click — show format selection dialog.
+   */
+  _handleExport() {
+    const layers = this.sceneManager.getLayers();
+    if (layers.length === 0) {
+      this._showToast('No layers to export', 'error');
+      return;
+    }
+
+    // Show export dialog
+    this._showExportDialog();
+  }
+
+  /**
+   * Show export format selection dialog.
+   */
+  _showExportDialog() {
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'export-modal-overlay';
+    overlay.innerHTML = `
+      <div class="export-modal glass">
+        <div class="export-modal-header">
+          <h3>Export Scene</h3>
+          <button class="export-modal-close">&times;</button>
+        </div>
+        <div class="export-modal-body">
+          <div class="export-info">
+            <strong>${this.sceneManager.totalGaussians.toLocaleString()}</strong> gaussians from
+            <strong>${this.sceneManager.layers.filter(l => l.visible).length}</strong> layers
+          </div>
+          <div class="export-options">
+            <button class="export-option-btn" data-format="splatv">
+              <span class="export-option-icon">&#128230;</span>
+              <span class="export-option-title">.splatv (Recommended)</span>
+              <span class="export-option-desc">Full metadata: layers, transforms, camera path</span>
+            </button>
+            <button class="export-option-btn" data-format="splat">
+              <span class="export-option-icon">&#128196;</span>
+              <span class="export-option-title">.splat (Standard)</span>
+              <span class="export-option-desc">Compatible with other viewers, no metadata</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Event handlers
+    const closeModal = () => overlay.remove();
+
+    overlay.querySelector('.export-modal-close').onclick = closeModal;
+    overlay.onclick = (e) => {
+      if (e.target === overlay) closeModal();
+    };
+
+    overlay.querySelectorAll('.export-option-btn').forEach(btn => {
+      btn.onclick = () => {
+        const format = btn.dataset.format;
+        closeModal();
+        this._doExport(format);
+      };
+    });
+  }
+
+  /**
+   * Perform the actual export.
+   */
+  _doExport(format) {
+    try {
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
+      let blob, filename;
+
+      if (format === 'splatv') {
+        blob = exportSceneToSplatv(this.sceneManager, this.controls, this.pathEditor);
+        filename = `scene_${timestamp}.splatv`;
+      } else {
+        blob = exportSceneToSplat(this.sceneManager);
+        filename = `scene_${timestamp}.splat`;
+      }
+
+      downloadBlob(blob, filename);
+      this._showToast(`Exported ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
+    } catch (err) {
+      console.error('Export failed:', err);
+      this._showToast('Export failed: ' + err.message, 'error');
+    }
+  }
+
+  /**
+   * Show toast notification.
+   */
+  _showToast(message, type = 'success') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
   }
 
   render() {

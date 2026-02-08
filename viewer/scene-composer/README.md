@@ -1,3 +1,4 @@
+
 # 4DGS Scene Composer
 
 멀티레이어 4D Gaussian Splatting 씬 합성 도구. 여러 3DGS/4DGS 오브젝트를 하나의 씬에 배치하고, TRELLIS AI로 이미지에서 3D 오브젝트를 생성하고, World Labs API로 텍스트/이미지에서 3D Map을 생성하며, 카메라 경로를 편집/녹화할 수 있습니다.
